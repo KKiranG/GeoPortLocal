@@ -29,6 +29,67 @@ async def test_connect_does_not_cache_failed_session(descriptor: DeviceDescripto
 
 
 @pytest.mark.asyncio
+async def test_connect_timeout_leaves_no_reusable_session(descriptor: DeviceDescriptor) -> None:
+    class SlowAdapter:
+        async def discover(self) -> list[DeviceDescriptor]:
+            return [descriptor]
+
+        async def connect(self, _: str) -> FakeConnection:
+            await asyncio.sleep(0.05)
+            return FakeConnection(descriptor)
+
+    manager = SessionManager(
+        SlowAdapter(),
+        timeouts=SessionTimeouts(connect=0.01),
+    )
+
+    with pytest.raises(GeoPortError) as raised:
+        await manager.connect(descriptor.identifier)
+
+    assert raised.value.code == ErrorCode.OPERATION_TIMEOUT
+    assert manager.snapshot.state == DeviceState.DISCONNECTED
+    assert manager.snapshot.device is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_connects_share_one_serialized_connection(
+    descriptor: DeviceDescriptor,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    connection = FakeConnection(descriptor)
+
+    class BlockingAdapter:
+        def __init__(self) -> None:
+            self.connect_calls = 0
+
+        async def discover(self) -> list[DeviceDescriptor]:
+            return [descriptor]
+
+        async def connect(self, _: str) -> FakeConnection:
+            self.connect_calls += 1
+            started.set()
+            await release.wait()
+            return connection
+
+    adapter = BlockingAdapter()
+    manager = SessionManager(adapter)
+
+    first = asyncio.create_task(manager.connect(descriptor.identifier))
+    await started.wait()
+    second = asyncio.create_task(manager.connect(descriptor.identifier))
+    await asyncio.sleep(0)
+
+    assert not second.done()
+    release.set()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert first_result.state == DeviceState.READY
+    assert second_result.state == DeviceState.READY
+    assert adapter.connect_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_set_location_returns_only_after_real_success(descriptor: DeviceDescriptor) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(FakeAdapter(descriptor, connection=connection))
@@ -105,6 +166,31 @@ async def test_set_timeout_invalidates_uncertain_session(descriptor: DeviceDescr
 
 
 @pytest.mark.asyncio
+async def test_clear_transport_failure_invalidates_session(descriptor: DeviceDescriptor) -> None:
+    connection = FakeConnection(
+        descriptor,
+        clear_error=GeoPortError(
+            ErrorCode.DEVICE_DISCONNECTED,
+            "Device disconnected.",
+            retryable=True,
+        ),
+    )
+    manager = SessionManager(FakeAdapter(descriptor, connection=connection))
+
+    await manager.connect(descriptor.identifier)
+    await manager.set_location(Location(-33.8688, 151.2093))
+
+    with pytest.raises(GeoPortError) as raised:
+        await manager.clear_location()
+
+    assert raised.value.code == ErrorCode.DEVICE_DISCONNECTED
+    assert manager.snapshot.state == DeviceState.DISCONNECTED
+    assert manager.snapshot.device is None
+    assert manager.snapshot.location is None
+    assert connection.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_clear_is_idempotent_when_ready(descriptor: DeviceDescriptor) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(FakeAdapter(descriptor, connection=connection))
@@ -114,6 +200,34 @@ async def test_clear_is_idempotent_when_ready(descriptor: DeviceDescriptor) -> N
 
     assert result.state == DeviceState.READY
     assert connection.clear_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_disconnect_is_idempotent_when_already_disconnected(
+    descriptor: DeviceDescriptor,
+) -> None:
+    adapter = FakeAdapter(descriptor)
+    manager = SessionManager(adapter)
+
+    first = await manager.disconnect()
+    second = await manager.disconnect()
+
+    assert first.state == DeviceState.DISCONNECTED
+    assert second.state == DeviceState.DISCONNECTED
+    assert adapter.connect_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_disconnect_from_ready_closes_without_clear(descriptor: DeviceDescriptor) -> None:
+    connection = FakeConnection(descriptor)
+    manager = SessionManager(FakeAdapter(descriptor, connection=connection))
+
+    await manager.connect(descriptor.identifier)
+    result = await manager.disconnect()
+
+    assert result.state == DeviceState.DISCONNECTED
+    assert connection.clear_calls == 0
+    assert connection.close_calls == 1
 
 
 @pytest.mark.asyncio
@@ -130,6 +244,65 @@ async def test_disconnect_clears_simulation_then_closes(descriptor: DeviceDescri
     assert result.location is None
     assert connection.clear_calls == 1
     assert connection.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_still_closes_when_clear_fails(descriptor: DeviceDescriptor) -> None:
+    clear_error = GeoPortError(
+        ErrorCode.LOCATION_CLEAR_FAILED,
+        "Clear failed during disconnect.",
+        retryable=True,
+    )
+    connection = FakeConnection(descriptor, clear_error=clear_error)
+    manager = SessionManager(FakeAdapter(descriptor, connection=connection))
+
+    await manager.connect(descriptor.identifier)
+    await manager.set_location(Location(-33.8688, 151.2093))
+    result = await manager.disconnect()
+
+    assert result.state == DeviceState.DISCONNECTED
+    assert result.device is None
+    assert result.location is None
+    assert result.last_error is not None
+    assert result.last_error.code == ErrorCode.LOCATION_CLEAR_FAILED
+    assert connection.clear_calls == 1
+    assert connection.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_failed_session_creates_fresh_connection(
+    descriptor: DeviceDescriptor,
+) -> None:
+    connection = FakeConnection(descriptor)
+
+    class RecoveringAdapter:
+        def __init__(self) -> None:
+            self.connect_calls = 0
+
+        async def discover(self) -> list[DeviceDescriptor]:
+            return [descriptor]
+
+        async def connect(self, _: str) -> FakeConnection:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise GeoPortError(
+                    ErrorCode.TUNNEL_UNAVAILABLE,
+                    "First tunnel failed.",
+                    retryable=True,
+                )
+            return connection
+
+    adapter = RecoveringAdapter()
+    manager = SessionManager(adapter)
+
+    with pytest.raises(GeoPortError):
+        await manager.connect(descriptor.identifier)
+
+    recovered = await manager.connect(descriptor.identifier)
+
+    assert recovered.state == DeviceState.READY
+    assert recovered.device == descriptor
+    assert adapter.connect_calls == 2
 
 
 @pytest.mark.asyncio
@@ -172,6 +345,35 @@ async def test_set_while_disconnected_is_rejected_without_adapter_call(
         await manager.set_location(Location(-33.8688, 151.2093))
 
     assert adapter.connect_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_connect_disconnect_closes_every_fresh_connection(
+    descriptor: DeviceDescriptor,
+) -> None:
+    class FreshConnectionAdapter:
+        def __init__(self) -> None:
+            self.connections: list[FakeConnection] = []
+
+        async def discover(self) -> list[DeviceDescriptor]:
+            return [descriptor]
+
+        async def connect(self, _: str) -> FakeConnection:
+            connection = FakeConnection(descriptor)
+            self.connections.append(connection)
+            return connection
+
+    adapter = FreshConnectionAdapter()
+    manager = SessionManager(adapter)
+
+    for _ in range(100):
+        connected = await manager.connect(descriptor.identifier)
+        assert connected.state == DeviceState.READY
+        disconnected = await manager.disconnect()
+        assert disconnected.state == DeviceState.DISCONNECTED
+
+    assert len(adapter.connections) == 100
+    assert all(connection.close_calls == 1 for connection in adapter.connections)
 
 
 @pytest.mark.asyncio
