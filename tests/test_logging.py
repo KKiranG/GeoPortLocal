@@ -1,6 +1,7 @@
 import logging
 
-from geoportlocal.runtime.logging import RedactingFormatter, redact_text
+import geoportlocal.runtime.logging as logging_module
+from geoportlocal.runtime.logging import RedactingFormatter, configure_logging, redact_text
 
 
 def test_redact_text_removes_modern_and_legacy_udids() -> None:
@@ -38,3 +39,25 @@ def test_redacting_formatter_removes_identifier_from_message_and_exception() -> 
     assert udid not in rendered
     assert "<udid:redacted>" in rendered
     assert "<identifier:redacted>" in rendered
+
+
+def test_configure_logging_persists_bounded_redacted_log(tmp_path, monkeypatch) -> None:
+    log_path = tmp_path / "GeoPortLocal" / "geoportlocal.log"
+    monkeypatch.setattr(logging_module, "default_log_path", lambda: log_path)
+
+    try:
+        active_path = configure_logging()
+        udid = "00008150-001D342A348A401C"
+        logging.getLogger("geoportlocal.test").warning("device serial=%s", udid)
+
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        persisted = log_path.read_text(encoding="utf-8")
+        assert active_path == log_path
+        assert udid not in persisted
+        assert "serial=<identifier:redacted>" in persisted
+        assert log_path.stat().st_size < logging_module._LOG_MAX_BYTES
+    finally:
+        logging.shutdown()
+        logging.basicConfig(handlers=[logging.NullHandler()], force=True)
