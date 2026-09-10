@@ -1,6 +1,8 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const TILE_SIZE = 256;
+const MAX_MERCATOR_LAT = 85.05112878;
 
 const ui = {
   message: $("message"),
@@ -21,16 +23,25 @@ const ui = {
   fuelQuote: $("fuel-quote"),
   fuelFreshness: $("fuel-freshness"),
   map: $("map"),
+  mapTiles: $("map-tiles"),
+  mapMarker: $("map-marker"),
+  mapZoomIn: $("map-zoom-in"),
+  mapZoomOut: $("map-zoom-out"),
   mapFallback: $("map-fallback"),
 };
 
 const state = {
   snapshot: { state: "disconnected", device: null, location: null, last_error: null },
   devices: [],
-  map: null,
-  marker: null,
   pollTimer: null,
   operationInFlight: false,
+  map: {
+    centerLat: -33.8688,
+    centerLon: 151.2093,
+    zoom: 11,
+    markerLat: -33.8688,
+    markerLon: 151.2093,
+  },
 };
 
 class ApiError extends Error {
@@ -76,10 +87,12 @@ function humanState(value) {
 }
 
 function stateClass(value) {
-  if (["ready"].includes(value)) return "ready";
-  if (["simulating"].includes(value)) return "simulating";
-  if (["connecting", "discovering", "setting_location", "clearing", "disconnecting"].includes(value)) return "busy";
-  if (["error"].includes(value)) return "error";
+  if (value === "ready") return "ready";
+  if (value === "simulating") return "simulating";
+  if (["connecting", "discovering", "setting_location", "clearing", "disconnecting"].includes(value)) {
+    return "busy";
+  }
+  if (value === "error") return "error";
   return "";
 }
 
@@ -90,9 +103,12 @@ function isBusy(value) {
 function hasValidCoordinates() {
   const latitude = Number(ui.latitude.value);
   const longitude = Number(ui.longitude.value);
-  return Number.isFinite(latitude) && Number.isFinite(longitude)
-    && latitude >= -90 && latitude <= 90
-    && longitude >= -180 && longitude <= 180;
+  return Number.isFinite(latitude)
+    && Number.isFinite(longitude)
+    && latitude >= -90
+    && latitude <= 90
+    && longitude >= -180
+    && longitude <= 180;
 }
 
 function renderSnapshot(snapshot) {
@@ -129,7 +145,9 @@ function renderSnapshot(snapshot) {
   ui.refreshDevices.disabled = connected || busy;
   ui.connectDevice.disabled = connected || busy || !ui.deviceSelect.value;
   ui.disconnectDevice.disabled = !connected || busy;
-  ui.setLocation.disabled = busy || !hasValidCoordinates() || !["ready", "simulating"].includes(current);
+  ui.setLocation.disabled = busy
+    || !hasValidCoordinates()
+    || !["ready", "simulating"].includes(current);
   ui.clearLocation.disabled = busy || current !== "simulating";
 
   if (snapshot.last_error) {
@@ -178,6 +196,7 @@ async function refreshDevices({ quiet = false } = {}) {
         ui.deviceSelect.value = previous;
       }
     }
+    await refreshStatus({ quiet: true });
   } catch (error) {
     ui.deviceSelect.replaceChildren(new Option("Device discovery unavailable", ""));
     if (!quiet) reportError(error);
@@ -254,7 +273,10 @@ function reportError(error) {
   if (error instanceof ApiError) {
     showMessage(`${error.code}: ${error.message}`, "error");
   } else {
-    showMessage("Unexpected browser-side failure. The server state has not been assumed successful.", "error");
+    showMessage(
+      "Unexpected browser-side failure. The server state has not been assumed successful.",
+      "error",
+    );
   }
 }
 
@@ -264,7 +286,10 @@ async function refreshStatus({ quiet = false } = {}) {
     const wasConnected = Boolean(state.snapshot.device);
     renderSnapshot(snapshot);
     if (wasConnected && !snapshot.device && !quiet) {
-      showMessage("The selected device is no longer present. The local session was invalidated.", "error");
+      showMessage(
+        "The selected device is no longer present. The local session was invalidated.",
+        "error",
+      );
     }
   } catch (error) {
     if (!quiet) reportError(error);
@@ -287,54 +312,160 @@ function scheduleStatusPoll() {
 function coordinatesChanged() {
   renderSnapshot(state.snapshot);
   if (!hasValidCoordinates()) return;
-  const latitude = Number(ui.latitude.value);
-  const longitude = Number(ui.longitude.value);
-  placeMarker(latitude, longitude, false);
+  setMapMarker(Number(ui.latitude.value), Number(ui.longitude.value), false);
+}
+
+function coordinatesCommitted() {
+  if (!hasValidCoordinates()) return;
+  setMapMarker(Number(ui.latitude.value), Number(ui.longitude.value), true);
 }
 
 function setCoordinates(latitude, longitude, { center = true } = {}) {
   ui.latitude.value = Number(latitude).toFixed(6);
   ui.longitude.value = Number(longitude).toFixed(6);
-  placeMarker(Number(latitude), Number(longitude), center);
+  setMapMarker(Number(latitude), Number(longitude), center);
   renderSnapshot(state.snapshot);
 }
 
-function initMap() {
-  if (!window.L) {
-    ui.map.hidden = true;
-    ui.mapFallback.hidden = false;
-    return;
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeLongitude(longitude) {
+  return ((longitude + 180) % 360 + 360) % 360 - 180;
+}
+
+function latLonToWorld(latitude, longitude, zoom) {
+  const lat = clamp(latitude, -MAX_MERCATOR_LAT, MAX_MERCATOR_LAT);
+  const lon = normalizeLongitude(longitude);
+  const scale = TILE_SIZE * (2 ** zoom);
+  const sinLatitude = Math.sin(lat * Math.PI / 180);
+  return {
+    x: ((lon + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * Math.PI)) * scale,
+  };
+}
+
+function worldToLatLon(x, y, zoom) {
+  const scale = TILE_SIZE * (2 ** zoom);
+  const longitude = normalizeLongitude((x / scale) * 360 - 180);
+  const mercator = Math.PI - (2 * Math.PI * y) / scale;
+  const latitude = (180 / Math.PI) * Math.atan(Math.sinh(mercator));
+  return { latitude: clamp(latitude, -MAX_MERCATOR_LAT, MAX_MERCATOR_LAT), longitude };
+}
+
+function currentMapGeometry() {
+  const width = ui.map.clientWidth;
+  const height = ui.map.clientHeight;
+  const center = latLonToWorld(state.map.centerLat, state.map.centerLon, state.map.zoom);
+  return {
+    width,
+    height,
+    center,
+    left: center.x - width / 2,
+    top: center.y - height / 2,
+  };
+}
+
+function renderMap() {
+  const geometry = currentMapGeometry();
+  if (geometry.width <= 0 || geometry.height <= 0) return;
+
+  const zoom = state.map.zoom;
+  const tileCount = 2 ** zoom;
+  const minTileX = Math.floor(geometry.left / TILE_SIZE);
+  const maxTileX = Math.floor((geometry.left + geometry.width) / TILE_SIZE);
+  const minTileY = Math.floor(geometry.top / TILE_SIZE);
+  const maxTileY = Math.floor((geometry.top + geometry.height) / TILE_SIZE);
+  const fragment = document.createDocumentFragment();
+  let loadedTiles = 0;
+  let failedTiles = 0;
+
+  for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+    if (tileY < 0 || tileY >= tileCount) continue;
+    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+      const wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
+      const image = document.createElement("img");
+      image.className = "map-tile";
+      image.alt = "";
+      image.draggable = false;
+      image.decoding = "async";
+      image.src = `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${tileY}.png`;
+      image.style.left = `${Math.round(tileX * TILE_SIZE - geometry.left)}px`;
+      image.style.top = `${Math.round(tileY * TILE_SIZE - geometry.top)}px`;
+      image.addEventListener("load", () => {
+        loadedTiles += 1;
+        if (loadedTiles > 0) ui.mapFallback.hidden = true;
+      });
+      image.addEventListener("error", () => {
+        failedTiles += 1;
+        if (failedTiles >= 3 && loadedTiles === 0) ui.mapFallback.hidden = false;
+      });
+      fragment.append(image);
+    }
   }
 
-  try {
-    state.map = L.map("map", { zoomControl: true }).setView([-33.8688, 151.2093], 11);
-    const tiles = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors",
-    });
-    tiles.on("tileerror", () => {
-      ui.mapFallback.hidden = false;
-      ui.mapFallback.textContent = "Map tiles could not be loaded. Coordinate and device controls remain available.";
-    });
-    tiles.addTo(state.map);
-    state.map.on("click", (event) => {
-      setCoordinates(event.latlng.lat, event.latlng.lng, { center: false });
-    });
-    placeMarker(-33.8688, 151.2093, false);
-  } catch (_) {
-    ui.map.hidden = true;
-    ui.mapFallback.hidden = false;
+  ui.mapTiles.replaceChildren(fragment);
+  positionMapMarker(geometry);
+}
+
+function positionMapMarker(geometry = currentMapGeometry()) {
+  const world = latLonToWorld(state.map.markerLat, state.map.markerLon, state.map.zoom);
+  const worldWidth = TILE_SIZE * (2 ** state.map.zoom);
+  let markerX = world.x;
+
+  while (markerX - geometry.center.x > worldWidth / 2) markerX -= worldWidth;
+  while (geometry.center.x - markerX > worldWidth / 2) markerX += worldWidth;
+
+  const left = markerX - geometry.left;
+  const top = world.y - geometry.top;
+  ui.mapMarker.style.left = `${left}px`;
+  ui.mapMarker.style.top = `${top}px`;
+  ui.mapMarker.hidden = left < -20
+    || top < -20
+    || left > geometry.width + 20
+    || top > geometry.height + 20;
+}
+
+function setMapMarker(latitude, longitude, center) {
+  state.map.markerLat = clamp(latitude, -MAX_MERCATOR_LAT, MAX_MERCATOR_LAT);
+  state.map.markerLon = normalizeLongitude(longitude);
+  if (center) {
+    state.map.centerLat = state.map.markerLat;
+    state.map.centerLon = state.map.markerLon;
+    renderMap();
+  } else {
+    positionMapMarker();
   }
 }
 
-function placeMarker(latitude, longitude, center = true) {
-  if (!state.map || !window.L || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
-  if (!state.marker) {
-    state.marker = L.marker([latitude, longitude]).addTo(state.map);
-  } else {
-    state.marker.setLatLng([latitude, longitude]);
-  }
-  if (center) state.map.setView([latitude, longitude], Math.max(state.map.getZoom(), 13));
+function initMap() {
+  renderMap();
+
+  ui.map.addEventListener("click", (event) => {
+    if (event.target.closest(".map-controls")) return;
+    const rect = ui.map.getBoundingClientRect();
+    const geometry = currentMapGeometry();
+    const worldX = geometry.left + event.clientX - rect.left;
+    const worldY = geometry.top + event.clientY - rect.top;
+    const point = worldToLatLon(worldX, worldY, state.map.zoom);
+    setCoordinates(point.latitude, point.longitude, { center: false });
+  });
+
+  ui.mapZoomIn.addEventListener("click", () => {
+    state.map.zoom = clamp(state.map.zoom + 1, 3, 18);
+    renderMap();
+  });
+  ui.mapZoomOut.addEventListener("click", () => {
+    state.map.zoom = clamp(state.map.zoom - 1, 3, 18);
+    renderMap();
+  });
+
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(renderMap, 120);
+  });
 }
 
 function setFuelFreshness(stale) {
@@ -398,7 +529,9 @@ async function loadFuelQuote() {
   const fuelType = ui.fuelType.value;
   if (!region || !fuelType) return;
   try {
-    const payload = await requestJson(`/api/fuel/quote?region=${encodeURIComponent(region)}&type=${encodeURIComponent(fuelType)}`);
+    const payload = await requestJson(
+      `/api/fuel/quote?region=${encodeURIComponent(region)}&type=${encodeURIComponent(fuelType)}`,
+    );
     const quote = payload.quote;
     if (!quote) {
       fuelUnavailable(`No ${fuelType} quote is available for ${region}.`);
@@ -433,6 +566,8 @@ ui.clearLocation.addEventListener("click", clearLocation);
 ui.deviceSelect.addEventListener("change", () => renderSnapshot(state.snapshot));
 ui.latitude.addEventListener("input", coordinatesChanged);
 ui.longitude.addEventListener("input", coordinatesChanged);
+ui.latitude.addEventListener("change", coordinatesCommitted);
+ui.longitude.addEventListener("change", coordinatesCommitted);
 ui.fuelRegion.addEventListener("change", loadFuelTypes);
 ui.fuelType.addEventListener("change", loadFuelQuote);
 
