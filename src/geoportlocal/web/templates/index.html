@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>{{ app_name }}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/static/app.css">
-  <script defer src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script defer src="/static/app.js"></script>
 </head>
 <body>
@@ -114,11 +112,19 @@
             <h2 id="map-heading">Coordinate picker</h2>
           </div>
         </div>
-        <div id="map" aria-label="Map coordinate picker"></div>
+        <div id="map" aria-label="Map coordinate picker">
+          <div id="map-tiles" class="map-tiles" aria-hidden="true"></div>
+          <div id="map-marker" class="map-marker" aria-hidden="true"></div>
+          <div class="map-controls" aria-label="Map zoom controls">
+            <button id="map-zoom-in" type="button" aria-label="Zoom in">+</button>
+            <button id="map-zoom-out" type="button" aria-label="Zoom out">−</button>
+          </div>
+          <div class="map-attribution">© OpenStreetMap contributors</div>
+        </div>
         <div id="map-fallback" class="map-fallback" hidden>
           Map tiles are unavailable. You can still enter coordinates directly and use every device control.
         </div>
-        <p class="hint">The map is an optional Internet view. Device connection and set/clear operations do not depend on it.</p>
+        <p class="hint">The map loads image tiles only; no remote JavaScript executes in the local control page. Device operations do not depend on map availability.</p>
       </section>
     </div>
   </main>
