@@ -67,7 +67,7 @@ def test_explicit_busy_port_fails_instead_of_killing_process() -> None:
         blocker.close()
 
 
-def test_browser_ui_and_local_static_assets_are_served() -> None:
+def test_browser_ui_and_local_static_assets_are_served_with_security_headers() -> None:
     with TestClient(create_app(FakeAdapter(make_descriptor()))) as client:
         page = client.get("/")
         javascript = client.get("/static/app.js")
@@ -78,3 +78,41 @@ def test_browser_ui_and_local_static_assets_are_served() -> None:
     assert "Device truth only" in page.text
     assert javascript.status_code == 200
     assert stylesheet.status_code == 200
+
+    policy = page.headers["content-security-policy"]
+    assert "script-src 'self'" in policy
+    assert "connect-src 'self'" in policy
+    assert "img-src 'self' https://tile.openstreetmap.org" in policy
+    assert page.headers["x-content-type-options"] == "nosniff"
+    assert page.headers["x-frame-options"] == "DENY"
+    assert page.headers["referrer-policy"] == "no-referrer"
+
+
+def test_non_loopback_host_header_is_rejected() -> None:
+    with TestClient(create_app(FakeAdapter(make_descriptor()))) as client:
+        response = client.get("/api/health", headers={"host": "attacker.example"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_cross_site_browser_mutation_is_rejected_without_state_change() -> None:
+    descriptor = make_descriptor()
+    app = create_app(FakeAdapter(descriptor))
+
+    with TestClient(app) as client:
+        connected = client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        assert connected.json()["state"] == "ready"
+
+        rejected = client.post(
+            "/api/device/disconnect",
+            headers={
+                "origin": "https://attacker.example",
+                "sec-fetch-site": "cross-site",
+            },
+        )
+        status = client.get("/api/device/status")
+
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
+    assert status.json()["state"] == "ready"
