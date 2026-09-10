@@ -82,6 +82,47 @@ async def test_provider_rejects_schema_change_instead_of_leaking_key_error() -> 
 
 
 @pytest.mark.asyncio
+async def test_provider_rejects_malformed_json() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"{not-json")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = ProjectZeroThreeProvider(client)
+
+    with pytest.raises(GeoPortError) as raised:
+        await provider.fetch()
+
+    assert raised.value.code == ErrorCode.FUEL_PROVIDER_INVALID_RESPONSE
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_invalid_coordinates(valid_payload: dict[str, object]) -> None:
+    payload = valid_payload.copy()
+    regions = payload["regions"]
+    assert isinstance(regions, list)
+    region = regions[0]
+    assert isinstance(region, dict)
+    prices = region["prices"]
+    assert isinstance(prices, list)
+    price = prices[0]
+    assert isinstance(price, dict)
+    price["lat"] = 91
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = ProjectZeroThreeProvider(client)
+
+    with pytest.raises(GeoPortError) as raised:
+        await provider.fetch()
+
+    assert raised.value.code == ErrorCode.FUEL_PROVIDER_INVALID_RESPONSE
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_provider_retries_one_transport_failure(valid_payload: dict[str, object]) -> None:
     attempts = 0
 
@@ -99,6 +140,49 @@ async def test_provider_retries_one_transport_failure(valid_payload: dict[str, o
 
     assert attempts == 2
     assert snapshot.quotes[0].fuel_type == "U91"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [httpx.ConnectTimeout, httpx.ReadTimeout])
+async def test_provider_exhausts_bounded_transport_retry(failure_type) -> None:
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise failure_type("timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = ProjectZeroThreeProvider(client)
+
+    with pytest.raises(GeoPortError) as raised:
+        await provider.fetch()
+
+    assert raised.value.code == ErrorCode.FUEL_PROVIDER_UNAVAILABLE
+    assert raised.value.retryable is True
+    assert attempts == 2
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_retries_server_error_then_succeeds(valid_payload: dict[str, object]) -> None:
+    attempts = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, json={"error": "temporary"})
+        return httpx.Response(200, json=valid_payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = ProjectZeroThreeProvider(client)
+
+    snapshot = await provider.fetch()
+
+    assert attempts == 2
+    assert snapshot.stale is False
     await client.aclose()
 
 
@@ -169,6 +253,17 @@ async def test_service_reuses_fresh_snapshot_for_ui_followup_calls() -> None:
     assert quote is not None and quote.price_cents_per_litre == 169.9
     assert regions_stale is False
     assert types_stale is False
+    assert provider.fetch_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_service_returns_none_for_unknown_fuel_type() -> None:
+    provider = FakeFuelProvider(make_snapshot())
+    service = FuelService(provider)
+
+    quote = await service.quote("NSW", "NOT-A-TYPE")
+
+    assert quote is None
     assert provider.fetch_calls == 1
 
 
