@@ -306,7 +306,7 @@ class SessionManager:
                     probe(identifier),
                     timeout=self._timeouts.presence,
                 )
-            except (TimeoutError, Exception):
+            except Exception:
                 # Presence is a liveness hint, not authority when the probe itself fails.
                 return self.snapshot
 
