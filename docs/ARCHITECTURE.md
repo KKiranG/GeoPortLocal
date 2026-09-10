@@ -2,7 +2,7 @@
 
 Date: 2026-09-10  
 Branch: `geoportlocal-modernization`  
-Status: hardware-independent architecture implemented; target Mac/iPhone qualification pending
+Status: hardware-independent implementation complete; target Mac/iPhone qualification pending
 
 ## 1. Decision
 
@@ -44,7 +44,7 @@ src/geoportlocal/
     routes_fuel.py
 
   runtime/
-    logging.py             process-wide identifier redaction
+    logging.py             redacted stream + bounded persistent log
     security.py            Host/origin/CSP/browser security boundary
 
   web/
@@ -80,7 +80,7 @@ DISCONNECTING
 ERROR
 ```
 
-Normal successful flow:
+Normal successful set/clear flow:
 
 ```text
 DISCONNECTED
@@ -95,6 +95,8 @@ DISCONNECTED
 -> DISCONNECTING
 -> DISCONNECTED
 ```
+
+`READY` means GeoPortLocal owns a live device session and this process does not currently record a simulated coordinate. It does **not** prove that a previous crashed/terminated process left no simulation on the phone. Consequently an explicit Clear from READY is a real recovery operation and calls the device service; it is not optimized away as a no-op.
 
 Browser controls are projections of returned server state. A button click is never treated as proof of success.
 
@@ -146,6 +148,8 @@ PreferredRsdTunnel(serial=identifier)
 -> LocationSimulation
 ```
 
+The exact pinned `pymobiledevice3 v11.12.1` source describes `PreferredRsdTunnel` as the no-root wrapper for callers wanting a working iOS 17+ RSD path without choosing a concrete tunnel. On macOS it prefers Apple's native `remoted` path and falls back to the userspace tunnel; elsewhere it uses the userspace tunnel. Keep this wrapper unless observed hardware evidence disproves the assumption.
+
 `AsyncExitStack` owns the complete stack. If an inner layer fails, already-entered resources unwind before an error escapes. No raw RSD host/port enters application state.
 
 Set/clear are awaited directly:
@@ -154,6 +158,12 @@ Set/clear are awaited directly:
 await location_service.set(latitude, longitude)
 await location_service.clear()
 ```
+
+### Developer Disk Image boundary
+
+`DvtProvider` itself is not treated as proof that a Developer Disk Image is prepared. `pymobiledevice3` exposes a separate mounter/auto-mount path. GeoPortLocal does **not** pre-emptively add an Internet-dependent DDI download/mount step merely from assumption.
+
+If the actual target phone fails to open DVT with evidence indicating a missing/unavailable developer image, local qualification must first reproduce and classify that exact failure. Only then may the adapter gain a narrow DDI preparation step, with tests and explicit offline implications.
 
 ## 6. Compatibility policy
 
@@ -181,7 +191,7 @@ current simulated Location or None
 last safe GeoPortError or None
 ```
 
-Discovery/connect/set/clear/disconnect are serialized through the same lock. There is no per-operation thread creation or global terminate flag.
+Discovery/connect/set/clear/disconnect and authoritative presence checks are serialized through the same lock. There is no per-operation thread creation or global terminate flag.
 
 Timeouts:
 
@@ -191,6 +201,7 @@ connect       20 s
 set location  10 s
 clear         10 s
 disconnect     5 s
+presence       2 s
 ```
 
 Failure rules:
@@ -198,7 +209,7 @@ Failure rules:
 - failed connect caches no connection;
 - non-transport set/clear failure restores the previous truthful state and records the safe error;
 - `DEVICE_DISCONNECTED`, `TUNNEL_UNAVAILABLE` or `OPERATION_TIMEOUT` invalidates the owned session;
-- clear is idempotent when already `READY`;
+- explicit clear is permitted from both READY and SIMULATING and always awaits the device clear operation;
 - disconnect is idempotent and still closes the connection if clear-on-disconnect fails;
 - shutdown uses the same cleanup path.
 
@@ -206,15 +217,17 @@ A timeout is treated conservatively because device-side completion may be uncert
 
 ## 8. Idle disconnect detection
 
-The browser polls `/api/device/status` about every 2.5 seconds only while a session exists. The status route asks a cheap `usbmux` presence probe:
+The browser polls `/api/device/status` about every 2.5 seconds only while a session exists. `SessionManager.check_presence()` owns the complete check under the same mutation lock as connection changes and bounds the probe to two seconds:
 
 ```text
 identifier present -> preserve session
-successful enumeration + absent -> invalidate/disconnect session
-probe failed -> unknown; do not destroy a potentially healthy session
+successful enumeration + absent -> invalidate session with DEVICE_DISCONNECTED
+probe failed/timed out -> unknown; preserve potentially healthy session
 ```
 
-This detects cable removal without restoring a resident watcher thread.
+When physical absence has already been positively established, invalidation does not attempt an impossible clear against the absent transport. It drops logical ownership, best-effort closes the stale connection, and requires a fresh connection after reattach.
+
+Keeping probe + invalidation under one lock prevents a stale absence result from invalidating a newer connection created concurrently.
 
 ## 9. Canonical local API
 
@@ -235,7 +248,7 @@ GET    /static/*
 
 `/api/health` performs no phone, fuel, map or Internet operation.
 
-Expected project errors use stable JSON envelopes. Request-validation failures are sanitized. Any otherwise-unhandled application exception is also converted to a generic `INTERNAL_ERROR` response; the raw exception text/traceback is not returned to the browser. Normal handling logs only the exception class, not its arbitrary message.
+Expected project errors use stable JSON envelopes. Request-validation failures are sanitized. Any otherwise-unhandled application exception is converted to a generic `INTERNAL_ERROR` response; raw exception text/traceback is not returned to the browser. Normal handling logs only the exception class, not an arbitrary exception message.
 
 ## 10. Loopback listener and process coexistence
 
@@ -259,19 +272,20 @@ Loopback binding is necessary but not sufficient for a browser-accessible local 
 
 ### Host validation
 
-Requests must use a local Host value (`127.0.0.1` or `localhost`; `testserver` exists only for the test harness). Non-local Host headers are rejected before application routes run. This reduces DNS-rebinding exposure.
+Requests must resolve through an allowed local Host (`127.0.0.1` or `localhost`; `testserver` exists for the test harness). Non-local Host values are rejected before application routes run, reducing DNS-rebinding exposure.
 
 ### Cross-site mutation protection
 
 For mutating `/api/*` methods (`POST`, `PUT`, `PATCH`, `DELETE`):
 
 - `Sec-Fetch-Site: cross-site` is rejected;
-- if an `Origin` header is present, its hostname must be local;
-- clients without browser Origin headers, such as local curl/scripts, remain usable.
+- when a browser `Origin` is present, scheme, hostname and effective port must exactly match the request origin;
+- another localhost port is not accepted merely because its hostname is local;
+- local non-browser clients without an Origin header remain usable.
 
 A rejected mutation receives a stable `INVALID_REQUEST` response and must not alter device state.
 
-### Content Security Policy
+### Content and cache policy
 
 Responses carry a restrictive CSP:
 
@@ -295,9 +309,11 @@ Additional response headers include:
 ```text
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
-Referrer-Policy: no-referrer
+Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
+
+The referrer policy deliberately does not suppress the browser Referer for OpenStreetMap tile requests; only the local origin is sent cross-site, not a path/query. HTML and `/api/*` responses are `Cache-Control: no-store` so stale browser state is not treated as authoritative. Static package assets retain normal cache validators.
 
 The page itself does not request browser geolocation; selected coordinates are explicit user input, map clicks or fuel-quote coordinates.
 
@@ -325,24 +341,25 @@ Fuel failure cannot break health or device APIs.
 
 All executable assets come from the local package. The map uses only remote OSM image tiles.
 
-Workflow:
+Typical workflow:
 
 ```text
 refresh devices
 -> connect and wait for READY
+-> optional explicit recovery Clear while READY
 -> choose coordinates
 -> set and wait for SIMULATING
 -> clear and wait for READY
 -> disconnect and wait for DISCONNECTED
 ```
 
-Selecting a fuel quote fills the coordinate picker; it does not call the location mutation endpoint automatically.
+Set and Clear are enabled only when a live session is in READY/SIMULATING as appropriate; Clear remains available in READY specifically for stale-simulation recovery. Selecting a fuel quote fills the coordinate picker but does not call the location mutation endpoint automatically.
 
 If map tiles or the Internet fail, manual coordinates and every local device control remain available.
 
 ## 14. Logging/privacy
 
-Normal logs use a process-wide redacting formatter.
+Normal logs use the same redacting formatter for console and persisted diagnostics.
 
 Rules:
 
@@ -352,6 +369,14 @@ Rules:
 - exact selected latitude/longitude are not normal log content;
 - blanket dependency DEBUG is not enabled by default;
 - unexpected application errors do not log arbitrary exception messages at normal level.
+
+The desktop build also attempts a bounded rotating per-user log. On macOS:
+
+```text
+~/Library/Logs/GeoPortLocal/geoportlocal.log
+```
+
+The primary log is capped at roughly 1 MB with two backups. Log-file creation failure must never prevent application startup. GeoPortLocal does not share a log/config path with the installed legacy app.
 
 ## 15. Packaging
 
@@ -366,6 +391,8 @@ PyInstaller onedir/BUNDLE style
 ```
 
 The spec includes local web assets and initially uses `collect_all("pymobiledevice3")` for reliability because the dependency has runtime-loaded pieces. Size pruning, signing/notarization distribution work and Windows packaging come after the primary correctness gate.
+
+Persistent file logging is important for the windowed package because `console=False` means stderr is not a reliable user-facing diagnostic surface after freezing.
 
 ## 16. Migration mapping
 
@@ -396,9 +423,11 @@ Before regular use, the target Mac must still prove:
 - Ruff/full pytest success;
 - real USB/trust/Developer Mode path;
 - actual `PreferredRsdTunnel`/DVT/LocationSimulation behavior;
+- explicit recovery clear from READY;
 - set/clear and repeated cycles;
 - unplug/reconnect;
-- CSP/browser behavior in the real browser;
+- CSP/origin/cache/browser behavior in the real browser;
+- persistent packaged diagnostics;
 - live provider compatibility;
 - packaged app launch/shutdown/relaunch and side-by-side coexistence.
 
