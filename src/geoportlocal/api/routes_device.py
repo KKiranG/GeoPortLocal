@@ -9,6 +9,7 @@ from geoportlocal.api.serialization import device_payload, snapshot_payload
 from geoportlocal.device.presence import PresenceProbe
 from geoportlocal.device.session import SessionManager
 from geoportlocal.domain.device import Location
+from geoportlocal.domain.errors import GeoPortError
 
 router = APIRouter(prefix="/api")
 
@@ -57,4 +58,10 @@ async def clear_location(request: Request) -> dict[str, object]:
 @router.post("/device/disconnect")
 async def disconnect_device(request: Request) -> dict[str, object]:
     snapshot = await _manager(request).disconnect()
+    if snapshot.last_error is not None:
+        raise GeoPortError(
+            snapshot.last_error.code,
+            snapshot.last_error.message,
+            retryable=snapshot.last_error.retryable,
+        )
     return snapshot_payload(snapshot)
