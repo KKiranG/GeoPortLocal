@@ -114,3 +114,48 @@ def test_unknown_request_fields_are_rejected() -> None:
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_REQUEST"
         assert adapter.connect_calls == 0
+
+
+def test_status_invalidates_idle_session_when_presence_probe_proves_absent() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(descriptor)
+
+    async def absent(_: str) -> bool:
+        return False
+
+    app = create_app(
+        FakeAdapter(descriptor, connection=connection),
+        presence_probe=absent,
+    )
+
+    with TestClient(app) as client:
+        connected = client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        assert connected.json()["state"] == "ready"
+
+        status = client.get("/api/device/status")
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "disconnected"
+    assert status.json()["device"] is None
+    assert connection.close_calls == 1
+
+
+def test_status_preserves_session_when_presence_is_unknown() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(descriptor)
+
+    async def unknown(_: str) -> None:
+        return None
+
+    app = create_app(
+        FakeAdapter(descriptor, connection=connection),
+        presence_probe=unknown,
+    )
+
+    with TestClient(app) as client:
+        client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        status = client.get("/api/device/status")
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "ready"
+    assert connection.close_calls == 1  # lifespan shutdown only
