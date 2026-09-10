@@ -1,82 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 
 import pytest
 
 from geoportlocal.device.session import SessionManager, SessionTimeouts
-from geoportlocal.domain.device import ConnectionKind, DeviceDescriptor, DeviceState, Location
+from geoportlocal.domain.device import DeviceDescriptor, DeviceState, Location
 from geoportlocal.domain.errors import ErrorCode, GeoPortError, InvalidStateError
-
-
-@dataclass
-class FakeConnection:
-    descriptor: DeviceDescriptor
-    set_error: GeoPortError | None = None
-    clear_error: GeoPortError | None = None
-    set_delay: float = 0.0
-    set_started: asyncio.Event | None = None
-    set_release: asyncio.Event | None = None
-    set_calls: list[Location] = field(default_factory=list)
-    clear_calls: int = 0
-    close_calls: int = 0
-
-    async def set_location(self, location: Location) -> None:
-        self.set_calls.append(location)
-        if self.set_started is not None:
-            self.set_started.set()
-        if self.set_release is not None:
-            await self.set_release.wait()
-        if self.set_delay:
-            await asyncio.sleep(self.set_delay)
-        if self.set_error:
-            raise self.set_error
-
-    async def clear_location(self) -> None:
-        self.clear_calls += 1
-        if self.clear_error:
-            raise self.clear_error
-
-    async def close(self) -> None:
-        self.close_calls += 1
-
-
-@dataclass
-class FakeAdapter:
-    descriptor: DeviceDescriptor
-    connection: FakeConnection | None = None
-    connect_error: GeoPortError | None = None
-    discover_error: GeoPortError | None = None
-    discover_calls: int = 0
-    connect_calls: int = 0
-
-    async def discover(self) -> list[DeviceDescriptor]:
-        self.discover_calls += 1
-        if self.discover_error:
-            raise self.discover_error
-        return [self.descriptor]
-
-    async def connect(self, identifier: str) -> FakeConnection:
-        self.connect_calls += 1
-        if self.connect_error:
-            raise self.connect_error
-        if identifier != self.descriptor.identifier:
-            raise GeoPortError(ErrorCode.DEVICE_NOT_FOUND, "Device not found.", retryable=True)
-        if self.connection is None:
-            self.connection = FakeConnection(self.descriptor)
-        return self.connection
+from tests.fakes import FakeAdapter, FakeConnection, make_descriptor
 
 
 @pytest.fixture
 def descriptor() -> DeviceDescriptor:
-    return DeviceDescriptor(
-        identifier="00008150-TEST401C",
-        name="iPhone",
-        product_type="iPhone17,1",
-        ios_version="26.5",
-        connection=ConnectionKind.USB,
-    )
+    return make_descriptor()
 
 
 @pytest.mark.asyncio
@@ -236,6 +172,25 @@ async def test_set_while_disconnected_is_rejected_without_adapter_call(
         await manager.set_location(Location(-33.8688, 151.2093))
 
     assert adapter.connect_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_set_clear_does_not_create_extra_connections(
+    descriptor: DeviceDescriptor,
+) -> None:
+    connection = FakeConnection(descriptor)
+    adapter = FakeAdapter(descriptor, connection=connection)
+    manager = SessionManager(adapter)
+
+    await manager.connect(descriptor.identifier)
+    for index in range(100):
+        await manager.set_location(Location(-33.8688 + index / 100_000, 151.2093))
+        await manager.clear_location()
+
+    assert manager.snapshot.state == DeviceState.READY
+    assert adapter.connect_calls == 1
+    assert len(connection.set_calls) == 100
+    assert connection.clear_calls == 100
 
 
 def test_location_rejects_non_finite_and_out_of_range_values() -> None:
