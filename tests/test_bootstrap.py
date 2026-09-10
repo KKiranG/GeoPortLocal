@@ -24,6 +24,7 @@ def test_health_endpoint_is_local_app_health_only() -> None:
         "app": "GeoPortLocal",
         "version": __version__,
     }
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_launcher_defaults_to_loopback() -> None:
@@ -85,7 +86,10 @@ def test_browser_ui_and_local_static_assets_are_served_with_security_headers() -
     assert "img-src 'self' https://tile.openstreetmap.org" in policy
     assert page.headers["x-content-type-options"] == "nosniff"
     assert page.headers["x-frame-options"] == "DENY"
-    assert page.headers["referrer-policy"] == "no-referrer"
+    assert page.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert page.headers["cache-control"] == "no-store"
+    assert "cache-control" not in javascript.headers
+    assert "cache-control" not in stylesheet.headers
 
 
 def test_non_loopback_host_header_is_rejected() -> None:
@@ -94,6 +98,7 @@ def test_non_loopback_host_header_is_rejected() -> None:
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_cross_site_browser_mutation_is_rejected_without_state_change() -> None:
