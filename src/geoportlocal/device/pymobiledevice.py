@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
-from typing import NoReturn
 
 from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import (
-    ConnectionFailedError,
     ConnectionTerminatedError,
     DeveloperModeIsNotEnabledError,
     DeviceNotFoundError,
@@ -117,10 +115,10 @@ class PymobileDeviceAdapter:
 
         # usbmux can expose the same device through USB and network transports.
         # Prefer USB for a local desktop workflow and return one row per identifier.
-        preferred: dict[str, object] = {}
+        preferred: dict[str, usbmux.MuxDevice] = {}
         for mux_device in mux_devices:
             existing = preferred.get(mux_device.serial)
-            if existing is None or (mux_device.is_usb and not getattr(existing, "is_usb", False)):
+            if existing is None or (mux_device.is_usb and not existing.is_usb):
                 preferred[mux_device.serial] = mux_device
 
         descriptors: list[DeviceDescriptor] = []
@@ -159,7 +157,7 @@ class PymobileDeviceAdapter:
 
         return await PymobileDeviceConnection.open(descriptor)
 
-    async def _find_device(self, identifier: str):
+    async def _find_device(self, identifier: str) -> usbmux.MuxDevice:
         try:
             devices = [device for device in await usbmux.list_devices() if device.serial == identifier]
         except Exception as exc:
@@ -257,7 +255,10 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
     if isinstance(exc, GeoPortError):
         return exc
 
-    if isinstance(exc, (NotTrustedError, NotPairedError, PairingDialogResponsePendingError, UserDeniedPairingError)):
+    if isinstance(
+        exc,
+        (NotTrustedError, NotPairedError, PairingDialogResponsePendingError, UserDeniedPairingError),
+    ):
         return GeoPortError(
             ErrorCode.DEVICE_NOT_TRUSTED,
             "Unlock the iOS device, confirm Trust if prompted, then try again.",
@@ -283,12 +284,7 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
 
     if isinstance(
         exc,
-        (
-            DeviceNotFoundError,
-            NoDeviceConnectedError,
-            ConnectionTerminatedError,
-            NotConnectedError,
-        ),
+        (DeviceNotFoundError, NoDeviceConnectedError, ConnectionTerminatedError, NotConnectedError),
     ):
         return GeoPortError(
             ErrorCode.DEVICE_DISCONNECTED,
@@ -297,16 +293,7 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
             cause=exc,
         )
 
-    if isinstance(
-        exc,
-        (
-            UserspaceTunnelUnavailableError,
-            TunneldConnectionError,
-            RSDRequiredError,
-            ConnectionFailedError,
-            MuxException,
-        ),
-    ):
+    if isinstance(exc, (UserspaceTunnelUnavailableError, TunneldConnectionError, RSDRequiredError, MuxException)):
         return GeoPortError(
             ErrorCode.TUNNEL_UNAVAILABLE,
             "Could not establish the iOS developer-service connection.",
@@ -314,7 +301,8 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
             cause=exc,
         )
 
-    if operation == "set" and isinstance(exc, (DvtException, InvalidServiceError, PyMobileDevice3Exception, OSError)):
+    dependency_failure = isinstance(exc, (DvtException, PyMobileDevice3Exception, OSError))
+    if operation == "set" and dependency_failure:
         return GeoPortError(
             ErrorCode.LOCATION_SET_FAILED,
             "The device rejected or lost the location-simulation request.",
@@ -322,7 +310,7 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
             cause=exc,
         )
 
-    if operation == "clear" and isinstance(exc, (DvtException, InvalidServiceError, PyMobileDevice3Exception, OSError)):
+    if operation == "clear" and dependency_failure:
         return GeoPortError(
             ErrorCode.LOCATION_CLEAR_FAILED,
             "The simulated location could not be cleared through the active device session.",
