@@ -27,15 +27,19 @@ A regular-use build requires zero open P0 and no unresolved P1 in the declared p
 | S07 | P0 | set timeout | no success; uncertain session invalidated | TEST EXISTS |
 | S08 | P0 | concurrent connect calls | one serialized owned connection | TEST EXISTS |
 | S09 | P0 | set and clear overlap | deterministic serialization | TEST EXISTS |
-| S10 | P1 | clear while READY | idempotent; no unnecessary upstream call | TEST EXISTS |
+| S10 | P1 | explicit clear while READY | send recovery clear to device, remain READY on success | TEST EXISTS |
 | S11 | P1 | disconnect while disconnected | idempotent | TEST EXISTS |
-| S12 | P1 | disconnect while READY | close once; no clear required | TEST EXISTS |
+| S12 | P1 | disconnect while READY | close once; no implicit clear required | TEST EXISTS |
 | S13 | P1 | disconnect while SIMULATING | clear attempted then close | TEST EXISTS |
 | S14 | P1 | clear fails during disconnect | close still runs; diagnostic preserved | TEST EXISTS |
 | S15 | P1 | reconnect after failed session | new connect attempt succeeds; stale failure not reused | TEST EXISTS |
 | S16 | P1 | 100 connect/disconnect cycles | every fresh connection closes once | TEST EXISTS |
 | S17 | P1 | 100 set/clear cycles | no extra connection creation; deterministic counts | TEST EXISTS |
 | S18 | P2 | set while disconnected | typed invalid state; adapter untouched | TEST EXISTS |
+| S19 | P1 | presence probe times out | uncertainty preserves active session; no stale close | TEST EXISTS |
+| S20 | P1 | recovery clear fails while READY | remain READY, preserve error, never claim clear success | TEST EXISTS |
+
+`READY` means the local session is connected and does not currently record a simulated coordinate. It does **not** prove that a previous crashed process left no device-side simulation. Therefore an explicit Clear from READY is a real recovery command, not a no-op.
 
 Primary file: `tests/test_session.py`.
 
@@ -65,7 +69,7 @@ Primary files: `tests/test_pymobiledevice_adapter.py`, `tests/test_logging.py`.
 |---|---|---|---|---|
 | A01 | P0 | connect fails | non-2xx stable envelope; never ready | TEST EXISTS |
 | A02 | P0 | set fails | non-2xx `LOCATION_SET_FAILED`; never simulating | TEST EXISTS |
-| A03 | P0 | clear fails | non-2xx; never claim ready | TEST EXISTS |
+| A03 | P0 | clear fails | non-2xx; never claim ready from SIMULATING | TEST EXISTS |
 | A04 | P1 | set before connect | `INVALID_STATE`; adapter untouched | TEST EXISTS |
 | A05 | P1 | latitude out of range | validation failure; no device call | TEST EXISTS |
 | A06 | P1 | longitude out of range | validation failure; no device call | TEST EXISTS |
@@ -74,8 +78,9 @@ Primary files: `tests/test_pymobiledevice_adapter.py`, `tests/test_logging.py`.
 | A09 | P1 | health without phone/Internet dependency | health remains local-only | TEST EXISTS |
 | A10 | P1 | fuel provider unavailable | device API remains functional | TEST EXISTS |
 | A11 | P2 | unexpected internal exception | sanitized JSON `INTERNAL_ERROR`; no raw exception string | TEST EXISTS |
-| A12 | P1 | presence probe proves selected device absent | status invalidates session | TEST EXISTS |
+| A12 | P1 | presence probe proves selected device absent | status invalidates session and reports `DEVICE_DISCONNECTED` | TEST EXISTS |
 | A13 | P1 | presence probe cannot determine state | healthy cached session not destroyed from uncertainty alone | TEST EXISTS |
+| A14 | P1 | physical absence while SIMULATING | invalidate stale transport without attempting impossible clear | TEST EXISTS |
 
 Primary files: `tests/test_api.py`, `tests/test_fuel_api.py`.
 
@@ -97,7 +102,7 @@ Primary files: `tests/test_api.py`, `tests/test_fuel_api.py`.
 
 Primary files: `tests/test_fuel.py`, `tests/test_fuel_api.py`.
 
-## 5. Local-server/browser security regressions
+## 5. Local-server/browser/security/logging regressions
 
 | ID | Sev | Scenario | Expected | Coverage before local gate |
 |---|---|---|---|---|
@@ -107,15 +112,18 @@ Primary files: `tests/test_fuel.py`, `tests/test_fuel_api.py`.
 | L04 | P1 | browser/static page | local JS/CSS served; no remote executable JS dependency | TEST EXISTS + source inspection |
 | L05 | P1 | hostile/non-loopback Host | reject request | TEST EXISTS |
 | L06 | P1 | cross-site browser mutation | reject before changing device state | TEST EXISTS |
-| L07 | P1 | CSP | script/connect restricted to self; only OSM tile images allowed remotely | TEST EXISTS |
-| L08 | P2 | browser hardening headers | nosniff/frame/referrer/permissions policy present | TEST EXISTS |
-| L09 | P1 | external network unavailable | local health/device workflow must remain usable | HARDWARE/LOCAL ONLY |
-| L10 | P1 | invalid TLS/provider certificate | TLS verification must remain enabled | DEPENDENCY/LOCAL CHECK; no code path disables verification |
-| L11 | P2 | unexpected request fields | rejected without state corruption | TEST EXISTS |
+| L07 | P1 | exact browser origin | mutation Origin must match request scheme/host/effective port | TEST EXISTS |
+| L08 | P1 | CSP | script/connect restricted to self; only OSM tile images allowed remotely | TEST EXISTS |
+| L09 | P2 | browser hardening headers | nosniff/frame/permissions + OSM-compatible strict-origin referrer policy | TEST EXISTS |
+| L10 | P1 | HTML/API cache behavior | authoritative HTML/API responses are `no-store`; static assets remain cacheable | TEST EXISTS |
+| L11 | P1 | external network unavailable | local health/device workflow must remain usable | HARDWARE/LOCAL ONLY |
+| L12 | P1 | invalid TLS/provider certificate | TLS verification must remain enabled | DEPENDENCY/LOCAL CHECK; no code path disables verification |
+| L13 | P2 | unexpected request fields | rejected without state corruption | TEST EXISTS |
+| L14 | P2 | persistent diagnostics | bounded rotating log is written and identifiers remain redacted on disk | TEST EXISTS |
 
-The runtime also no longer creates a helper thread to launch the browser; the already-listening socket queues an early browser request until uvicorn starts accepting.
+The runtime no longer creates a helper thread to launch the browser; the already-listening socket queues an early browser request until uvicorn starts accepting.
 
-Primary files: `tests/test_bootstrap.py`, `src/geoportlocal/runtime/security.py`.
+Primary files: `tests/test_bootstrap.py`, `tests/test_logging.py`, `src/geoportlocal/runtime/security.py`.
 
 ## 6. Browser/UI qualification
 
@@ -126,8 +134,8 @@ A browser automation framework is intentionally not added merely for this alpha.
 | U01 | P0 | backend set fails | UI never shows success/simulating |
 | U02 | P1 | partial metadata | discovered device remains selectable/understandable |
 | U03 | P1 | disconnected | set/clear disabled |
-| U04 | P1 | ready | set enabled; clear disabled |
-| U05 | P1 | simulating | clear enabled; state visible |
+| U04 | P1 | READY | set enabled; Clear also enabled as an explicit stale-simulation recovery command |
+| U05 | P1 | SIMULATING | clear enabled; state/location visible |
 | U06 | P1 | operation in progress | duplicate mutating actions disabled |
 | U07 | P1 | fuel provider down | device controls remain usable |
 | U08 | P2 | map tiles unavailable | coordinate entry and device controls remain usable |
@@ -139,24 +147,25 @@ A browser automation framework is intentionally not added merely for this alpha.
 
 Record actual runs here. Never infer PASS from upstream documentation or committed unit tests.
 
-| Host | Host version | Device | iOS | Connection | Discover | Connect | Set | Clear | 20x set/clear | Unplug recovery | Result | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Mac Apple Silicon | TBD | primary iPhone | 26.x | USB | TBD | TBD | TBD | TBD | TBD | TBD | TBD | |
-| Mac Apple Silicon | TBD | available device | 18.x | USB | TBD | TBD | TBD | TBD | TBD | TBD | TBD | |
+| Host | Host version | Device | iOS | Connection | Discover | Connect | Recovery clear from READY | Set | Clear | 20x set/clear | Unplug recovery | Result | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Mac Apple Silicon | TBD | primary iPhone | 26.x | USB | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | |
+| Mac Apple Silicon | TBD | available device | 18.x | USB | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | |
 
 Add rows only for hardware actually tested.
 
 ## 8. Ordered physical checks
 
-### H01 — cold connect/set/clear
+### H01 — cold connect/recovery-clear/set/clear
 
 1. Launch GeoPortLocal with no phone; page and health must load.
 2. Attach unlocked trusted iPhone by USB.
 3. Refresh and connect.
-4. Set a test coordinate.
-5. Independently verify device-reported location changed.
-6. Clear and verify real location resumes.
-7. Disconnect.
+4. While state is READY, press **Clear location** once. This must execute a real device clear and return READY; it validates recovery from a possible stale simulation left by an earlier process.
+5. Set a test coordinate.
+6. Independently verify device-reported location changed.
+7. Clear and verify real location resumes.
+8. Disconnect.
 
 Pass: UI state agrees with completed device operations and no restart is required.
 
@@ -170,13 +179,13 @@ Pass: no progressive slowdown, stale connection, growing process/thread/socket c
 
 Connect to READY, unplug, wait for status polling, then reattach and reconnect.
 
-Pass: old session is invalidated and a fresh connection is created without restarting GeoPortLocal.
+Pass: old session is invalidated with `DEVICE_DISCONNECTED` and a fresh connection is created without restarting GeoPortLocal.
 
 ### H04 — unplug while SIMULATING
 
 Set location, unplug, observe the next status/operation, then reattach/reconnect.
 
-Pass: GeoPortLocal does not retain a fake READY/SIMULATING session. Record what the phone does with the simulated location after physical transport loss; do not guess it.
+Pass: GeoPortLocal does not retain a fake READY/SIMULATING session. Once usbmux has positively proved physical absence, GeoPortLocal does not waste time attempting a clear on the absent transport. Record what the phone itself does with the simulated location after transport loss; do not guess it.
 
 ### H05 — legacy coexistence and port collision
 
@@ -192,9 +201,15 @@ Pass: health/device controls continue; map tiles/fuel degrade without blocking l
 
 ### H07 — localhost browser boundary
 
-With the local page open, confirm the browser console shows no CSP violation for normal operation and no remote script is loaded. Verify map tile requests are images from `tile.openstreetmap.org` only.
+With the local page open, confirm the browser console shows no CSP violation for normal operation and no remote script is loaded. Verify map tile requests are images from `tile.openstreetmap.org` only and that their browser Referer is not suppressed by GeoPortLocal's policy.
 
-Pass: local UI works under the restrictive CSP.
+Pass: local UI works under the restrictive CSP, authoritative API/HTML responses are not cached, and OSM tiles remain ordinary browser image requests.
+
+### H08 — developer-service/DDI diagnostic if and only if connection fails
+
+Do not pre-emptively mount or download a Developer Disk Image. If the real DVT developer service fails to open with evidence indicating a missing/unavailable developer image, capture the smallest redacted error and test the pinned `pymobiledevice3` mounter path as a diagnostic. Only then decide whether GeoPortLocal needs an explicit DDI preparation step.
+
+Pass: either DVT works without intervention, or the exact DDI dependency is demonstrated and fixed narrowly. Do not add an Internet-dependent mount/download step merely from assumption.
 
 ## 9. Resource-leak observations
 
@@ -208,6 +223,8 @@ During local qualification capture before/after values where practical for:
 
 Counts should return to a stable baseline after repeated lifecycle tests. Per-operation growth is a failure.
 
+Persistent redacted logs are expected under the platform-specific GeoPortLocal log directory; on macOS the primary file is `~/Library/Logs/GeoPortLocal/geoportlocal.log` with bounded rotation.
+
 ## 10. Release gate
 
 Do not publish a GitHub Release because tests merely exist.
@@ -216,9 +233,10 @@ First private regular-use alpha requires:
 
 - generated and committed `uv.lock`;
 - `uv sync --locked`, Ruff and full pytest PASS on the target Mac;
-- H01-H07 observed on the primary setup as applicable;
+- H01-H07 observed on the primary setup and H08 resolved only if triggered;
 - no false-success result;
 - no stale logical session after unplug/reconnect;
+- explicit recovery clear from READY works on the primary phone;
 - legacy GeoPort preserved side-by-side;
 - no unresolved P0/P1 in the declared primary matrix;
 - limitations documented precisely.
