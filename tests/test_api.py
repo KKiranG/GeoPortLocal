@@ -65,6 +65,28 @@ def test_failed_set_never_returns_success_or_simulating_state() -> None:
         assert client.get("/api/device/status").json()["state"] == "ready"
 
 
+def test_failed_clear_never_reports_ready() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(
+        descriptor,
+        clear_error=GeoPortError(ErrorCode.LOCATION_CLEAR_FAILED, "Clear failed.", retryable=True),
+    )
+    adapter = FakeAdapter(descriptor, connection=connection)
+
+    with TestClient(create_app(adapter)) as client:
+        client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        client.post(
+            "/api/location",
+            json={"latitude": -33.8688, "longitude": 151.2093},
+        )
+        response = client.delete("/api/location")
+
+        assert response.status_code == 502
+        assert response.json()["error"]["code"] == "LOCATION_CLEAR_FAILED"
+        status = client.get("/api/device/status")
+        assert status.json()["state"] == "simulating"
+
+
 def test_failed_connect_uses_stable_error_envelope() -> None:
     descriptor = make_descriptor()
     adapter = FakeAdapter(
@@ -84,6 +106,21 @@ def test_failed_connect_uses_stable_error_envelope() -> None:
         assert client.get("/api/device/status").json()["state"] == "disconnected"
 
 
+def test_set_before_connect_is_rejected_without_adapter_call() -> None:
+    descriptor = make_descriptor()
+    adapter = FakeAdapter(descriptor)
+
+    with TestClient(create_app(adapter)) as client:
+        response = client.post(
+            "/api/location",
+            json={"latitude": -33.8688, "longitude": 151.2093},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE"
+    assert adapter.connect_calls == 0
+
+
 def test_invalid_coordinates_are_rejected_before_device_call() -> None:
     descriptor = make_descriptor()
     connection = FakeConnection(descriptor)
@@ -94,6 +131,41 @@ def test_invalid_coordinates_are_rejected_before_device_call() -> None:
         response = client.post(
             "/api/location",
             json={"latitude": -91, "longitude": 151.2093},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "INVALID_REQUEST"
+        assert connection.set_calls == []
+
+
+def test_invalid_longitude_is_rejected_before_device_call() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(descriptor)
+    adapter = FakeAdapter(descriptor, connection=connection)
+
+    with TestClient(create_app(adapter)) as client:
+        client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        response = client.post(
+            "/api/location",
+            json={"latitude": -33.8688, "longitude": 181},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "INVALID_REQUEST"
+        assert connection.set_calls == []
+
+
+def test_non_finite_coordinate_is_rejected() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(descriptor)
+    adapter = FakeAdapter(descriptor, connection=connection)
+
+    with TestClient(create_app(adapter)) as client:
+        client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        response = client.post(
+            "/api/location",
+            content='{"latitude": NaN, "longitude": 151.2093}',
+            headers={"content-type": "application/json"},
         )
 
         assert response.status_code == 422
@@ -114,6 +186,28 @@ def test_unknown_request_fields_are_rejected() -> None:
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_REQUEST"
         assert adapter.connect_calls == 0
+
+
+def test_unexpected_exception_uses_sanitized_internal_error_envelope() -> None:
+    app = create_app(FakeAdapter(make_descriptor()))
+
+    @app.get("/api/test-unexpected")
+    async def fail_unexpectedly() -> None:
+        raise RuntimeError("sensitive dependency detail 00008150-001D342A348A401C")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/test-unexpected")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "GeoPortLocal encountered an unexpected internal error.",
+            "retryable": False,
+        }
+    }
+    assert "00008150-001D342A348A401C" not in response.text
+    assert "sensitive dependency detail" not in response.text
 
 
 def test_status_invalidates_idle_session_when_presence_probe_proves_absent() -> None:
