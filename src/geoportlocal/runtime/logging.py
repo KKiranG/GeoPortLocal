@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import copy
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import re
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 _MODERN_UDID = re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}\b")
 _LEGACY_UDID = re.compile(r"\b[0-9A-Fa-f]{40}\b")
