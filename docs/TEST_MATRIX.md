@@ -29,17 +29,17 @@ A regular-use build requires zero open P0 and no unresolved P1 in the declared p
 | S09 | P0 | set and clear overlap | deterministic serialization | TEST EXISTS |
 | S10 | P1 | explicit clear while READY | send recovery clear to device, remain READY on success | TEST EXISTS |
 | S11 | P1 | disconnect while disconnected | idempotent | TEST EXISTS |
-| S12 | P1 | disconnect while READY | close once; no implicit clear required | TEST EXISTS |
-| S13 | P1 | disconnect while SIMULATING | clear attempted then close | TEST EXISTS |
-| S14 | P1 | clear fails during disconnect | close still runs; diagnostic preserved | TEST EXISTS |
+| S12 | P1 | disconnect while READY | recovery clear attempted, then close once | TEST EXISTS |
+| S13 | P1 | disconnect while SIMULATING | clear attempted, then close once | TEST EXISTS |
+| S14 | P1 | recovery clear fails during disconnect | close still runs; final local state DISCONNECTED; diagnostic preserved | TEST EXISTS |
 | S15 | P1 | reconnect after failed session | new connect attempt succeeds; stale failure not reused | TEST EXISTS |
-| S16 | P1 | 100 connect/disconnect cycles | every fresh connection closes once | TEST EXISTS |
+| S16 | P1 | 100 connect/disconnect cycles | each live session receives recovery clear and closes once | TEST EXISTS |
 | S17 | P1 | 100 set/clear cycles | no extra connection creation; deterministic counts | TEST EXISTS |
 | S18 | P2 | set while disconnected | typed invalid state; adapter untouched | TEST EXISTS |
 | S19 | P1 | presence probe times out | uncertainty preserves active session; no stale close | TEST EXISTS |
 | S20 | P1 | recovery clear fails while READY | remain READY, preserve error, never claim clear success | TEST EXISTS |
 
-`READY` means the local session is connected and does not currently record a simulated coordinate. It does **not** prove that a previous crashed process left no device-side simulation. Therefore an explicit Clear from READY is a real recovery command, not a no-op.
+`READY` means the local session is connected and does not currently record a simulated coordinate. It does **not** prove that a previous crashed process left no device-side simulation. Therefore explicit Clear from READY and normal disconnect/shutdown from a live READY session both perform a recovery clear. The exception is positively confirmed physical absence: there is then no useful transport on which to clear, so presence invalidation skips clear and closes stale resources best-effort.
 
 Primary file: `tests/test_session.py`.
 
@@ -81,6 +81,7 @@ Primary files: `tests/test_pymobiledevice_adapter.py`, `tests/test_logging.py`.
 | A12 | P1 | presence probe proves selected device absent | status invalidates session and reports `DEVICE_DISCONNECTED` | TEST EXISTS |
 | A13 | P1 | presence probe cannot determine state | healthy cached session not destroyed from uncertainty alone | TEST EXISTS |
 | A14 | P1 | physical absence while SIMULATING | invalidate stale transport without attempting impossible clear | TEST EXISTS |
+| A15 | P0 | disconnect recovery clear fails | local ownership still becomes DISCONNECTED, but API returns non-2xx cleanup error rather than false success | TEST EXISTS |
 
 Primary files: `tests/test_api.py`, `tests/test_fuel_api.py`.
 
@@ -140,6 +141,7 @@ A browser automation framework is intentionally not added merely for this alpha.
 | U07 | P1 | fuel provider down | device controls remain usable |
 | U08 | P2 | map tiles unavailable | coordinate entry and device controls remain usable |
 | U09 | P2 | fuel quote selected | coordinates fill; device location is not applied automatically |
+| U10 | P0 | disconnect cleanup fails | UI surfaces cleanup error; it must not display a successful disconnect message even though server state is locally DISCONNECTED |
 
 `src/geoportlocal/web/static/app.js` polls device status about every 2.5 seconds only while a session exists. It derives action availability from the latest server snapshot.
 
@@ -165,7 +167,7 @@ Add rows only for hardware actually tested.
 5. Set a test coordinate.
 6. Independently verify device-reported location changed.
 7. Clear and verify real location resumes.
-8. Disconnect.
+8. Disconnect. A live READY disconnect performs another recovery-safe clear before closing; if that cleanup fails, the UI/API must report the failure rather than success while local ownership still ends DISCONNECTED.
 
 Pass: UI state agrees with completed device operations and no restart is required.
 
@@ -173,13 +175,13 @@ Pass: UI state agrees with completed device operations and no restart is require
 
 Run 20 set/clear cycles, then five disconnect/reconnect cycles.
 
-Pass: no progressive slowdown, stale connection, growing process/thread/socket count or address-in-use failure.
+Pass: no progressive slowdown, stale connection, growing process/thread/socket count or address-in-use failure. Each normal live disconnect may issue a recovery clear before close by design.
 
 ### H03 — unplug while READY
 
 Connect to READY, unplug, wait for status polling, then reattach and reconnect.
 
-Pass: old session is invalidated with `DEVICE_DISCONNECTED` and a fresh connection is created without restarting GeoPortLocal.
+Pass: old session is invalidated with `DEVICE_DISCONNECTED` and a fresh connection is created without restarting GeoPortLocal. Confirmed absence skips clear because the transport is gone.
 
 ### H04 — unplug while SIMULATING
 
@@ -234,9 +236,10 @@ First private regular-use alpha requires:
 - generated and committed `uv.lock`;
 - `uv sync --locked`, Ruff and full pytest PASS on the target Mac;
 - H01-H07 observed on the primary setup and H08 resolved only if triggered;
-- no false-success result;
+- no false-success result, including disconnect cleanup;
 - no stale logical session after unplug/reconnect;
 - explicit recovery clear from READY works on the primary phone;
+- normal live disconnect/shutdown recovery clear behaves truthfully;
 - legacy GeoPort preserved side-by-side;
 - no unresolved P0/P1 in the declared primary matrix;
 - limitations documented precisely.
