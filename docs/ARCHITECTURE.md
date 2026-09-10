@@ -8,17 +8,17 @@ Status: hardware-independent architecture implemented; target Mac/iPhone qualifi
 
 GeoPortLocal keeps the useful browser workflow from GeoPort but replaces the legacy Flask/global/thread/manual-tunnel runtime with one asyncio-native application core.
 
-Backend: **FastAPI + uvicorn**. The reason is lifecycle coherence: the current `pymobiledevice3` API used by the modern device path is asynchronous, and one persistent device connection should live on one event loop rather than behind per-request loop/thread bridges.
+Backend: **FastAPI + uvicorn**. The current `pymobiledevice3` path is asynchronous, so one persistent device connection lives on one event loop rather than behind per-request loop/thread bridges.
 
-Frontend: **local plain HTML/CSS/JavaScript**. No React/Vue/Svelte, Bootstrap or jQuery. No remote JavaScript is loaded into the localhost control origin. The map picker is implemented locally; OpenStreetMap is used only for image tiles and may fail without affecting device control.
+Frontend: **local plain HTML/CSS/JavaScript**. No React/Vue/Svelte, Bootstrap, jQuery or remote executable JavaScript. The project-owned map picker performs Web-Mercator conversion locally; OpenStreetMap is used only for image tiles and may fail without affecting device control.
 
 ## 2. Implemented module layout
 
 ```text
 src/geoportlocal/
   __init__.py
-  __main__.py              launcher, loopback listener and browser start
-  app.py                   FastAPI composition/lifespan
+  __main__.py              loopback listener, uvicorn launch, browser start
+  app.py                   FastAPI composition, security middleware, lifespan
 
   domain/
     device.py              immutable device/location/session models
@@ -27,56 +27,45 @@ src/geoportlocal/
 
   device/
     adapter.py             project-owned protocols
-    pymobiledevice.py      only normal device-integration module that knows pymobiledevice3
-    presence.py            cheap usbmux presence probe for idle disconnects
+    pymobiledevice.py      pymobiledevice3 boundary
+    presence.py            cheap usbmux presence probe
     session.py             single lifecycle/state authority
 
   fuel/
     provider.py            provider protocol
-    project_zero_three.py  external PZT adapter/validation
+    project_zero_three.py  external provider adapter/validation
     service.py             fresh + last-good cache semantics
 
   api/
     models.py              strict request validation
-    errors.py              error-to-HTTP mapping
+    errors.py              expected + unexpected HTTP error sanitization
     serialization.py       canonical response payloads
     routes_device.py
     routes_fuel.py
 
   runtime/
-    logging.py             redacting formatter and short device identifiers
+    logging.py             process-wide identifier redaction
+    security.py            Host/origin/CSP/browser security boundary
 
   web/
     routes.py
     templates/index.html
     static/app.css
     static/app.js
-
-tests/
-  fakes.py
-  test_session.py
-  test_api.py
-  test_fuel.py
-  test_fuel_api.py
-  test_bootstrap.py
-  test_logging.py
-  test_pymobiledevice_adapter.py
 ```
 
-Legacy `src/main.py` and `src/templates/map*.html` remain untouched on this branch as reference/fallback material. They are not imported by the new runtime.
+Legacy `src/main.py` and `src/templates/map*.html` remain untouched and are not imported by the modern runtime.
 
-## 3. Device domain and state machine
+## 3. Device state and truth model
 
-`DeviceDescriptor` contains only the application fields needed to identify and display a device: identifier, optional name/product type/iOS version and connection kind. The full identifier is needed internally for device selection but routine logs use a short suffix and the process-wide formatter redacts common full UDID forms if they enter a message or traceback.
-
-`Location` requires finite numbers with:
+`Location` accepts finite values only:
 
 ```text
--90 <= latitude  <= 90
+-90 <= latitude <= 90
 -180 <= longitude <= 180
 ```
 
-The public device states implemented in `domain/device.py` are:
+Authoritative server states are:
 
 ```text
 DISCONNECTED
@@ -91,29 +80,27 @@ DISCONNECTING
 ERROR
 ```
 
-The state is authoritative on the server. Browser buttons are projections of returned state; JavaScript does not turn a click into assumed success.
-
-Normal successful path:
+Normal successful flow:
 
 ```text
 DISCONNECTED
-  -> DISCOVERING
-  -> DISCOVERED
-  -> CONNECTING
-  -> READY
-  -> SETTING_LOCATION
-  -> SIMULATING
-  -> CLEARING
-  -> READY
-  -> DISCONNECTING
-  -> DISCONNECTED
+-> DISCOVERING
+-> DISCOVERED
+-> CONNECTING
+-> READY
+-> SETTING_LOCATION
+-> SIMULATING
+-> CLEARING
+-> READY
+-> DISCONNECTING
+-> DISCONNECTED
 ```
 
-`ERROR` is an internal transition used while invalidating a broken connection; an unusable transport is not retained as a reusable session.
+Browser controls are projections of returned server state. A button click is never treated as proof of success.
 
 ## 4. Project-owned device boundary
 
-Application/API code depends on two protocols:
+Application/API code depends on protocols rather than `pymobiledevice3` directly:
 
 ```python
 class DeviceAdapter(Protocol):
@@ -128,78 +115,61 @@ class DeviceConnection(Protocol):
     async def close(self) -> None: ...
 ```
 
-This isolates dependency churn. Tests use fake adapters/connections; API tests do not mock internal `pymobiledevice3` objects.
+Only the device integration module knows `pymobiledevice3` internals. HTTP tests use fake adapters rather than mocking dependency internals.
 
-## 5. Current pymobiledevice3 adapter
+## 5. Current pymobiledevice3 path
 
-The branch pins `pymobiledevice3==11.12.1`, current at the research cutoff of 2026-09-10. Application code does not import `pymobiledevice3.cli.*` internals.
+The branch pins `pymobiledevice3==11.12.1` at the 2026-09-10 research cutoff.
 
-### Discovery
+Discovery:
 
-`PymobileDeviceAdapter.discover()`:
+1. `await usbmux.list_devices()`;
+2. deduplicate USB/network representations and prefer USB;
+3. attempt metadata enrichment with `create_using_usbmux(..., autopair=False)`;
+4. if metadata lookup fails, retain the physically discovered device with nullable metadata rather than hiding it.
 
-1. awaits `pymobiledevice3.usbmux.list_devices()`;
-2. deduplicates USB/network representations by identifier and prefers USB for the desktop workflow;
-3. attempts metadata enrichment using `create_using_usbmux(..., autopair=False)`;
-4. if metadata enrichment fails, keeps the physical device row with nullable metadata instead of silently hiding it.
+Connection preflight:
 
-Discovery never enables Wi-Fi connections or changes device configuration.
+1. re-enumerate selected identifier;
+2. open lockdown with `autopair=True` and bounded pair timeout;
+3. use authoritative device metadata;
+4. require iOS 17.4+ for the first modern milestone;
+5. require Developer Mode;
+6. close lockdown preflight;
+7. open the developer-service stack.
 
-### Connect preflight
-
-For the selected identifier, the adapter:
-
-1. re-enumerates to avoid connecting to a stale browser row;
-2. opens lockdown with `autopair=True` and bounded pair timeout;
-3. reads authoritative device metadata from the phone;
-4. requires iOS 17.4 or newer in the first modern milestone;
-5. checks Developer Mode and returns `DEVELOPER_MODE_REQUIRED` if disabled;
-6. closes the lockdown preflight context;
-7. creates the actual developer-service stack.
-
-GeoPortLocal does not remove a passcode or force-enable Developer Mode.
-
-### Developer-service stack
-
-The real `PymobileDeviceConnection` owns one `AsyncExitStack`:
+Owned developer-service stack:
 
 ```text
 PreferredRsdTunnel(serial=identifier)
-  -> RemoteServiceDiscoveryService
-    -> DvtProvider
-      -> LocationSimulation
+-> DvtProvider
+-> LocationSimulation
 ```
 
-Opening any inner layer unsuccessfully causes the already-entered layers to unwind before an error is returned. The connection is stored by `SessionManager` only after this complete stack has opened successfully.
+`AsyncExitStack` owns the complete stack. If an inner layer fails, already-entered resources unwind before an error escapes. No raw RSD host/port enters application state.
 
-No RSD address or port escapes into application/domain/API state.
-
-### Set and clear
-
-Current dependency calls are awaited directly:
+Set/clear are awaited directly:
 
 ```python
 await location_service.set(latitude, longitude)
 await location_service.clear()
 ```
 
-HTTP success therefore means the dependency call completed, not that a detached worker thread was started.
+## 6. Compatibility policy
 
-## 6. iOS compatibility policy
-
-Initial qualification target:
+Initial declared path:
 
 ```text
 iOS >= 17.4  -> modern adapter
 17.0-17.3.1  -> explicit unsupported result in this milestone
-< 17          -> explicit unsupported result until a separate tested adapter is justified
+< 17          -> unsupported until a separate tested adapter is justified
 ```
 
-Do not reintroduce the legacy hand-maintained `rsd_host`/`rsd_port` tuple cache to broaden old-version support.
+Do not reintroduce legacy raw RSD tuple caching merely to broaden old-version support.
 
-## 7. SessionManager invariants
+## 7. SessionManager ownership
 
-`SessionManager` is the single authority for mutable device lifecycle. It owns:
+One `SessionManager` owns:
 
 ```text
 adapter
@@ -211,9 +181,9 @@ current simulated Location or None
 last safe GeoPortError or None
 ```
 
-All discovery/connect/set/clear/disconnect operations are serialized with the same lock. There is no per-click thread creation and no global terminate flags.
+Discovery/connect/set/clear/disconnect are serialized through the same lock. There is no per-operation thread creation or global terminate flag.
 
-Timeout defaults:
+Timeouts:
 
 ```text
 discovery      5 s
@@ -223,85 +193,30 @@ clear         10 s
 disconnect     5 s
 ```
 
-Timeout at the application boundary is failure, never success-with-warning.
+Failure rules:
 
-### Failed connect
+- failed connect caches no connection;
+- non-transport set/clear failure restores the previous truthful state and records the safe error;
+- `DEVICE_DISCONNECTED`, `TUNNEL_UNAVAILABLE` or `OPERATION_TIMEOUT` invalidates the owned session;
+- clear is idempotent when already `READY`;
+- disconnect is idempotent and still closes the connection if clear-on-disconnect fails;
+- shutdown uses the same cleanup path.
 
-A failed connect leaves no connection object cached. If an adapter somehow returns a connection for a different identifier, that connection is closed and treated as an internal failure.
+A timeout is treated conservatively because device-side completion may be uncertain.
 
-### Set failure
+## 8. Idle disconnect detection
 
-Before the call, state becomes `SETTING_LOCATION`.
-
-On success:
-
-```text
-location stored -> SIMULATING
-```
-
-On non-transport failure:
-
-```text
-restore previous READY/SIMULATING state and previous location -> retain last_error -> raise
-```
-
-On `DEVICE_DISCONNECTED`, `TUNNEL_UNAVAILABLE` or `OPERATION_TIMEOUT`:
-
-```text
-remove connection/device/location -> best-effort close old connection -> DISCONNECTED -> raise
-```
-
-A set timeout is deliberately conservative. It can be ambiguous whether the device received the command immediately before communication was lost, so GeoPortLocal discards the uncertain session rather than reusing it.
-
-### Clear
-
-Clear is idempotent when state is already `READY`. From `SIMULATING`, state becomes `CLEARING`; success returns to `READY`. Transport failure invalidates the session.
-
-### Disconnect/shutdown
-
-If simulation is known active, disconnect first attempts clear. It then closes the owned connection even if clear failed, removes all local references and ends `DISCONNECTED`. FastAPI lifespan calls this same cleanup during graceful server shutdown.
-
-## 8. Idle physical-disconnect detection
-
-A session can otherwise remain visually `READY` if a cable is removed while no operation is running. GeoPortLocal solves this without restoring a background watcher thread.
-
-The browser polls `/api/device/status` approximately every 2.5 seconds **only while a session exists**. The status route invokes a cheap `usbmux.list_devices()` presence probe:
+The browser polls `/api/device/status` about every 2.5 seconds only while a session exists. The status route asks a cheap `usbmux` presence probe:
 
 ```text
 identifier present -> preserve session
-successful enumeration + identifier absent -> disconnect/invalidate session
-probe itself failed -> presence unknown; do not destroy a potentially healthy session
+successful enumeration + absent -> invalidate/disconnect session
+probe failed -> unknown; do not destroy a potentially healthy session
 ```
 
-Only positive evidence of absence invalidates idle state.
+This detects cable removal without restoring a resident watcher thread.
 
-## 9. Error taxonomy
-
-Stable project codes include:
-
-```text
-DEVICE_NOT_FOUND
-DEVICE_METADATA_FAILED
-DEVICE_NOT_TRUSTED
-DEVELOPER_MODE_REQUIRED
-IOS_VERSION_UNSUPPORTED
-TUNNEL_UNAVAILABLE
-DEVICE_DISCONNECTED
-LOCATION_SET_FAILED
-LOCATION_CLEAR_FAILED
-OPERATION_TIMEOUT
-FUEL_PROVIDER_UNAVAILABLE
-FUEL_PROVIDER_INVALID_RESPONSE
-INVALID_STATE
-INVALID_REQUEST
-INTERNAL_ERROR
-```
-
-A `GeoPortError` carries code, user-safe message, retryability and an optional internal cause. API responses do not return arbitrary dependency exception strings.
-
-## 10. HTTP API
-
-Implemented routes:
+## 9. Canonical local API
 
 ```text
 GET    /api/health
@@ -318,126 +233,139 @@ GET    /
 GET    /static/*
 ```
 
-`/api/health` deliberately performs no phone, fuel-provider, map or Internet operation.
+`/api/health` performs no phone, fuel, map or Internet operation.
 
-Location mutation input is strict JSON containing only finite latitude/longitude values. Unknown fields are rejected.
+Expected project errors use stable JSON envelopes. Request-validation failures are sanitized. Any otherwise-unhandled application exception is also converted to a generic `INTERNAL_ERROR` response; the raw exception text/traceback is not returned to the browser. Normal handling logs only the exception class, not its arbitrary message.
 
-Error envelope:
-
-```json
-{
-  "error": {
-    "code": "TUNNEL_UNAVAILABLE",
-    "message": "Could not establish the iOS developer-service connection.",
-    "retryable": true
-  }
-}
-```
-
-Failures use non-2xx status codes; they are not encoded as successful HTTP 200 responses.
-
-## 11. Local listener and coexistence
+## 10. Loopback listener and process coexistence
 
 The launcher binds only to `127.0.0.1`.
 
-When no `--port` is supplied:
+No explicit `--port`:
 
-1. atomically attempt to bind/listen on 54321;
-2. if it is occupied, close that failed socket and bind port 0 on loopback;
-3. pass the already-bound listener to uvicorn;
-4. print/open the actual chosen URL.
+1. atomically bind/listen on preferred 54321;
+2. if unavailable, bind port 0 on loopback;
+3. pass that already-bound socket to uvicorn;
+4. log the actual URL;
+5. optionally open the browser directly.
 
-This removes both the old kill-by-process-name behavior and the check-then-bind race. An explicitly requested busy `--port` fails clearly rather than choosing a different port behind the user's back.
+Explicit `--port N`: bind that loopback port or fail clearly.
 
-The old GeoPort application may remain installed or even own 54321; GeoPortLocal does not terminate it.
+GeoPortLocal never kills the existing port owner and never scans for processes named GeoPort. The already-listening socket removes the check-then-bind race. Browser launch needs no timer/helper thread; an early browser request can queue on the reserved listener until uvicorn accepts it.
+
+## 11. Browser/local-control security boundary
+
+Loopback binding is necessary but not sufficient for a browser-accessible local control plane. `runtime/security.py` adds a second boundary.
+
+### Host validation
+
+Requests must use a local Host value (`127.0.0.1` or `localhost`; `testserver` exists only for the test harness). Non-local Host headers are rejected before application routes run. This reduces DNS-rebinding exposure.
+
+### Cross-site mutation protection
+
+For mutating `/api/*` methods (`POST`, `PUT`, `PATCH`, `DELETE`):
+
+- `Sec-Fetch-Site: cross-site` is rejected;
+- if an `Origin` header is present, its hostname must be local;
+- clients without browser Origin headers, such as local curl/scripts, remain usable.
+
+A rejected mutation receives a stable `INVALID_REQUEST` response and must not alter device state.
+
+### Content Security Policy
+
+Responses carry a restrictive CSP:
+
+```text
+default-src 'self'
+base-uri 'none'
+object-src 'none'
+frame-ancestors 'none'
+form-action 'none'
+script-src 'self'
+style-src 'self'
+font-src 'self'
+connect-src 'self'
+img-src 'self' https://tile.openstreetmap.org
+```
+
+This makes “no remote executable JavaScript” an enforced browser policy, not only a coding convention.
+
+Additional response headers include:
+
+```text
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Permissions-Policy: camera=(), microphone=(), geolocation=()
+```
+
+The page itself does not request browser geolocation; selected coordinates are explicit user input, map clicks or fuel-quote coordinates.
 
 ## 12. Fuel boundary
 
-`ProjectZeroThreeProvider` is isolated because GeoPortLocal does not own its schema or availability.
+`ProjectZeroThreeProvider` is isolated because GeoPortLocal does not own its schema or uptime.
 
-Network policy implemented:
-
-```text
-HTTPS with normal certificate verification
-connect timeout  3 s
-read timeout     5 s
-maximum attempts 2
-retry delay      0.5 s
-retry only transport/5xx
-no retry for 4xx or schema failures
-```
-
-The provider validates/normalizes upstream objects into:
+Implemented network policy:
 
 ```text
-region
-fuel_type
-price_cents_per_litre
-suburb | None
-state | None
-latitude
-longitude
-fetched_at
-stale
+HTTPS with certificate verification
+connect timeout   3 s
+read timeout      5 s
+maximum attempts  2
+retry delay       0.5 s
+retry transport/5xx only
+no retry for 4xx/schema failures
 ```
 
-`FuelService` serializes refreshes, reuses a successful snapshot for 60 seconds and may return the last successful snapshot as explicitly stale if a later provider fetch fails.
+Provider output is validated into normalized fuel records. `FuelService` serializes refreshes, reuses a successful snapshot for 60 seconds and may return last-good data explicitly marked stale.
 
-A fuel outage cannot make `/api/health` or device operations fail.
+Fuel failure cannot break health or device APIs.
 
-## 13. Browser UI trust model
+## 13. Browser UI behavior
 
-All executable HTML/CSS/JavaScript is served from the GeoPortLocal package itself. The page does not load a CDN JavaScript framework/library.
+All executable assets come from the local package. The map uses only remote OSM image tiles.
 
-The map renderer performs local Web-Mercator coordinate conversion and requests only OpenStreetMap image tiles. If image tiles fail, the direct coordinate fields, fuel coordinates and every device operation remain usable.
-
-Browser behavior:
+Workflow:
 
 ```text
-refresh -> discover devices
-connect -> wait for server READY
-set -> wait for server SIMULATING
-clear -> wait for server READY
-disconnect -> wait for server DISCONNECTED
+refresh devices
+-> connect and wait for READY
+-> choose coordinates
+-> set and wait for SIMULATING
+-> clear and wait for READY
+-> disconnect and wait for DISCONNECTED
 ```
 
-Selecting a fuel quote updates the coordinate picker and map center only. It does **not** automatically call the device location endpoint.
+Selecting a fuel quote fills the coordinate picker; it does not call the location mutation endpoint automatically.
 
-The UI explicitly states that GeoPortLocal proves only its own simulation-operation boundary. A third-party application's acceptance/rejection is not used as device-health evidence.
+If map tiles or the Internet fail, manual coordinates and every local device control remain available.
 
-## 14. Logging and privacy
+## 14. Logging/privacy
 
-Normal runtime logging is INFO-level with a process-wide `RedactingFormatter`.
+Normal logs use a process-wide redacting formatter.
 
-Routine session messages log a shortened device suffix such as `***401C`, never coordinates. The formatter also redacts common modern/legacy UDID forms and labelled `udid`/`serial` values if a dependency puts them into a message or traceback.
+Rules:
 
-Examples:
-
-```text
-device_discovery_succeeded count=1 duration_ms=...
-connect_started device=***401C
-connect_succeeded device=***401C duration_ms=...
-location_set_succeeded device=***401C duration_ms=...
-location_clear_failed device=***401C code=... duration_ms=...
-disconnect_completed device=***401C cleanup_code=none duration_ms=...
-```
-
-No pair-record contents, authentication material or exact location coordinates belong in normal logs.
+- shortened device suffix only when useful;
+- common full modern/legacy UDID and labelled serial forms are redacted;
+- pair records/auth material are never routine log content;
+- exact selected latitude/longitude are not normal log content;
+- blanket dependency DEBUG is not enabled by default;
+- unexpected application errors do not log arbitrary exception messages at normal level.
 
 ## 15. Packaging
 
-Development metadata targets Python 3.14 and a generated `uv.lock` is the first local reproducibility artifact.
+Development targets Python 3.14. `uv.lock` is deliberately generated and verified on the target Mac rather than fabricated in GitHub-only work.
 
-The first macOS qualification package is deliberately a PyInstaller **onedir** app bundle:
+First Mac package:
 
 ```text
 GeoPortLocal.app
 bundle id: io.github.kkirang.geoportlocal
+PyInstaller onedir/BUNDLE style
 ```
 
-The spec includes the local web data and uses PyInstaller's `collect_all("pymobiledevice3")` for the first reliability build because the dependency has dynamic/runtime-loaded pieces. Bundle-size pruning is deferred until a packaged hardware path is proven.
-
-The build must remain side-by-side with the existing GeoPort app.
+The spec includes local web assets and initially uses `collect_all("pymobiledevice3")` for reliability because the dependency has runtime-loaded pieces. Size pruning, signing/notarization distribution work and Windows packaging come after the primary correctness gate.
 
 ## 16. Migration mapping
 
@@ -455,25 +383,23 @@ legacy /api/data/<fuel_type>           -> /api/fuel/*
 legacy update_location global          -> explicit POST /api/location payload
 legacy IP-country lookup               -> removed
 legacy GitHub broadcast/update startup -> removed
-legacy CDN JS framework stack          -> local browser code
+legacy CDN JS framework stack          -> local assets + restrictive CSP
 ```
 
-## 17. Architectural acceptance gate
+## 17. Evidence boundary
 
-Hardware-independent architecture is complete when the locked local test gate confirms that:
+The committed architecture and regression tests establish design intent and test coverage. They do not establish local PASS status.
 
-- API/application routes do not know RSD host/port details;
-- `pymobiledevice3` integration remains behind the device module boundary;
-- no device lifecycle uses module-level mutable global connection state;
-- no per-click/location/tunnel thread exists;
-- device mutations are awaited and serialized;
-- failed/timeout sessions cannot be reused;
-- idle physical absence can invalidate a session without a watcher thread;
-- device runtime does not depend on Internet/fuel/map services;
-- fuel runtime does not depend on an iPhone;
-- the HTTP listener is loopback-only and does not kill a conflicting process;
-- local executable web assets contain no remote JavaScript dependency;
-- normal logs redact device identifiers;
-- the old GeoPort application can coexist with GeoPortLocal.
+Before regular use, the target Mac must still prove:
 
-Actual readiness for daily use additionally requires the observed hardware/package gates in `docs/LOCAL_BOOTSTRAP.md` and `docs/TEST_MATRIX.md`. Repository inspection alone cannot satisfy those rows.
+- generated lockfile and locked dependency resolution;
+- Ruff/full pytest success;
+- real USB/trust/Developer Mode path;
+- actual `PreferredRsdTunnel`/DVT/LocationSimulation behavior;
+- set/clear and repeated cycles;
+- unplug/reconnect;
+- CSP/browser behavior in the real browser;
+- live provider compatibility;
+- packaged app launch/shutdown/relaunch and side-by-side coexistence.
+
+Those observations belong in `docs/TEST_MATRIX.md`. Repository inspection alone cannot mark them PASS.
