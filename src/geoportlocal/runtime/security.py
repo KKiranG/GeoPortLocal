@@ -107,7 +107,9 @@ def apply_browser_security_headers(
     response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # OSM's browser tile policy requires a Referer. The strict-origin policy sends
+    # only the local origin cross-site, not paths/query strings.
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if no_store:
         response.headers["Cache-Control"] = "no-store"
