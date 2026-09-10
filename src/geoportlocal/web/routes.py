@@ -8,8 +8,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-_WEB_ROOT = Path(__file__).resolve().parent
-_templates = Jinja2Templates(directory=str(_WEB_ROOT / "templates"))
+from geoportlocal import __version__
+
+WEB_ROOT = Path(__file__).resolve().parent
+_templates = Jinja2Templates(directory=str(WEB_ROOT / "templates"))
 
 router = APIRouter()
 
@@ -19,5 +21,5 @@ async def index(request: Request) -> HTMLResponse:
     return _templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"app_name": "GeoPortLocal"},
+        context={"app_name": "GeoPortLocal", "version": __version__},
     )
