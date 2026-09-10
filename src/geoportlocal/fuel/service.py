@@ -1,22 +1,38 @@
-"""Fuel-price application service with a small in-memory last-good cache."""
+"""Fuel-price application service with a bounded in-memory last-good cache."""
 
 from __future__ import annotations
 
 import asyncio
+import time
 
 from geoportlocal.domain.errors import GeoPortError
 from geoportlocal.domain.fuel import FuelQuote, FuelSnapshot
 from geoportlocal.fuel.provider import FuelProvider
 
+_DEFAULT_FRESH_SECONDS = 60.0
+
 
 class FuelService:
-    def __init__(self, provider: FuelProvider) -> None:
+    def __init__(self, provider: FuelProvider, *, fresh_seconds: float = _DEFAULT_FRESH_SECONDS) -> None:
+        if fresh_seconds < 0:
+            raise ValueError("fresh_seconds must not be negative")
         self._provider = provider
+        self._fresh_seconds = fresh_seconds
         self._lock = asyncio.Lock()
         self._last_good: FuelSnapshot | None = None
+        self._last_good_monotonic: float | None = None
 
-    async def snapshot(self, *, allow_stale: bool = True) -> FuelSnapshot:
+    async def snapshot(
+        self,
+        *,
+        allow_stale: bool = True,
+        force_refresh: bool = False,
+    ) -> FuelSnapshot:
         async with self._lock:
+            if not force_refresh and self._cache_is_fresh():
+                assert self._last_good is not None
+                return self._last_good
+
             try:
                 snapshot = await self._provider.fetch()
             except GeoPortError:
@@ -25,11 +41,12 @@ class FuelService:
                 raise
 
             self._last_good = snapshot
+            self._last_good_monotonic = time.monotonic()
             return snapshot
 
-    async def regions(self) -> list[str]:
+    async def regions(self) -> tuple[list[str], bool]:
         snapshot = await self.snapshot()
-        return sorted({quote.region for quote in snapshot.quotes})
+        return sorted({quote.region for quote in snapshot.quotes}), snapshot.stale
 
     async def fuel_types(self, region: str) -> tuple[list[str], bool]:
         snapshot = await self.snapshot()
@@ -59,3 +76,8 @@ class FuelService:
 
     async def close(self) -> None:
         await self._provider.close()
+
+    def _cache_is_fresh(self) -> bool:
+        if self._last_good is None or self._last_good_monotonic is None:
+            return False
+        return time.monotonic() - self._last_good_monotonic <= self._fresh_seconds
