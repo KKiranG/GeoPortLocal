@@ -32,8 +32,9 @@ GeoPortLocal may simulate a device location and display fuel-price data. It must
 Do not read the whole repository by default. Start with the task and load only the relevant context.
 
 - Current handoff: `docs/WORKLOG.md`
+- Definitive autonomous local execution: `docs/HERMES_LOCAL_HANDOFF.md`
 - Local/real-device procedure: `docs/LOCAL_BOOTSTRAP.md`
-- Bounded Codex sessions: `docs/CODEX_HANDOFF.md`
+- Bounded Codex/Astra delegation: `docs/CODEX_HANDOFF.md`
 - Product scope / sequencing: `docs/MASTER_PLAN.md`
 - Runtime and module boundaries: `docs/ARCHITECTURE.md`
 - Required regressions / acceptance cases: `docs/TEST_MATRIX.md`
@@ -48,18 +49,19 @@ Use targeted search (`rg`, specific file reads, focused tests) rather than recur
 
 1. Never report `connected`, `ready`, `simulating`, `cleared`, or equivalent success before the underlying operation has completed successfully.
 2. Never cache an incomplete or invalid device session. A session without a valid live service provider is not reusable.
-3. One selected device has at most one active device session and one active location-simulation operation.
-4. Disconnect, clear, cancellation and shutdown must be idempotent.
-5. A device disconnect or transport failure invalidates the session immediately. Recovery creates a fresh session rather than reusing stale host/port state.
-6. Device functionality must not depend on fuel-price, GitHub, IP-geolocation, map-tile or other unrelated network services.
-7. The local control plane binds to loopback only. Do not expose Flask/FastAPI on `0.0.0.0` by default.
-8. Browser-facing localhost requests must keep the local Host/origin boundary: reject non-local Host values and cross-site mutating API requests.
-9. Do not load remote executable JavaScript into the localhost control origin. Optional external map content is image-only and must be constrained by CSP.
-10. Do not disable TLS verification.
-11. Normal logs must not dump full UDIDs, pair records, exact selected coordinates, credentials or other secrets.
-12. Prefer `pymobiledevice3` documented/public library APIs. Do not import `pymobiledevice3.cli.*` internals into application code.
-13. Prefer one coherent asyncio runtime. Do not introduce unmanaged background threads when the same behavior can be expressed without them.
-14. Avoid dependency additions unless they remove more complexity than they add.
+3. One selected device has at most one active device session and all mutating/presence ownership operations are serialized.
+4. Disconnect, clear, cancellation and shutdown must be safe to repeat. Explicit Clear from READY is still a real device recovery command; READY does not prove that an earlier process left no device-side simulation.
+5. A device transport failure or positively confirmed physical absence invalidates the session. Recovery creates a fresh session rather than reusing stale host/port state. Presence uncertainty alone must not destroy a healthy session.
+6. Once physical absence is positively established, do not waste time attempting location clear on an already absent transport; invalidate ownership and close stale resources best-effort.
+7. Device functionality must not depend on fuel-price, GitHub, IP-geolocation, map-tile or other unrelated network services.
+8. The local control plane binds to loopback only. Do not expose Flask/FastAPI on `0.0.0.0` by default.
+9. Browser-facing localhost requests must keep the local Host/exact-origin boundary: reject non-local Host values and cross-site/different-origin mutating API requests.
+10. Do not load remote executable JavaScript into the localhost control origin. Optional external map content is image-only and constrained by CSP. Preserve `no-store` for authoritative HTML/API state and the OSM-compatible referrer policy.
+11. Do not disable TLS verification.
+12. Normal and persisted logs must not dump full UDIDs, pair records, exact selected coordinates, credentials or other secrets.
+13. Prefer `pymobiledevice3` documented/public library APIs. Do not import `pymobiledevice3.cli.*` internals into application code.
+14. Prefer one coherent asyncio runtime. Do not introduce unmanaged background threads when the same behavior can be expressed without them.
+15. Avoid dependency additions unless they remove more complexity than they add.
 
 ## Change method
 
@@ -73,12 +75,14 @@ For device-runtime changes:
 
 For browser/control-plane changes:
 - keep executable assets local;
-- preserve CSP, Host validation and cross-site mutation rejection unless a proven compatibility issue requires a reviewed replacement;
+- preserve CSP, Host validation, exact-origin mutation rejection, authoritative no-store behavior and log redaction unless a proven compatibility issue requires a reviewed replacement;
 - never make device actions depend on map or fuel availability.
 
 For legacy extraction/refactoring, do not mix large moves with behavior changes in the same commit when avoidable.
 
 For external dependencies or iOS behavior, verify current upstream documentation/source before changing architectural assumptions. Record material changes in `docs/RESEARCH_2026-09.md` or a later dated research note.
+
+Do not add Developer Disk Image auto-mount/download behavior pre-emptively. Only investigate or implement it when a real DVT failure specifically demonstrates that dependency, following `docs/HERMES_LOCAL_HANDOFF.md`.
 
 ## Dependency baseline
 
@@ -109,6 +113,6 @@ Do not perform unrelated cleanup while touching a file. Do not convert working c
 
 When blocked by hardware, leave the repository in a testable state, add the exact local command and expected observation to the relevant test matrix, and report the blocker precisely.
 
-Use normal Codex for deterministic mechanical work such as locking, linting and routine test fixes. Reserve GPT-6 Astra for difficult real-device/tunnel diagnosis or architecture-sensitive repairs where the additional reasoning is justified.
+Use normal coding workers for deterministic mechanical work such as locking, linting and routine test fixes. Reserve Astra for difficult real-device/tunnel diagnosis or architecture-sensitive repairs where the additional reasoning is justified.
 
 Use subagents only for genuinely separable research/review tasks. Do not spawn agents to reread the same files. The primary agent owns integration and final verification.
