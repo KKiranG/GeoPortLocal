@@ -56,6 +56,23 @@ async def test_discovery_deduplicates_network_and_usb_in_favour_of_usb(monkeypat
     assert devices[0].connection == ConnectionKind.USB
 
 
+@pytest.mark.asyncio
+async def test_metadata_failure_preserves_discovered_device(monkeypatch) -> None:
+    identifier = "00008150-001D342A348A401C"
+
+    async def fail_metadata(**_):
+        raise NotTrustedError()
+
+    monkeypatch.setattr(device_module, "create_using_usbmux", fail_metadata)
+    descriptor = await PymobileDeviceAdapter()._describe(identifier, "USB")
+
+    assert descriptor.identifier == identifier
+    assert descriptor.connection == ConnectionKind.USB
+    assert descriptor.name is None
+    assert descriptor.product_type is None
+    assert descriptor.ios_version is None
+
+
 def test_version_gate_accepts_modern_ios_and_rejects_legacy_path() -> None:
     assert _parse_ios_version("26.4.2") == (26, 4)
     _require_modern_ios(DeviceDescriptor(identifier="test", ios_version="17.4"))
@@ -74,6 +91,20 @@ def test_dependency_errors_translate_to_stable_project_errors() -> None:
     assert trust.code == ErrorCode.DEVICE_NOT_TRUSTED
     assert tunnel.code == ErrorCode.TUNNEL_UNAVAILABLE
     assert location.code == ErrorCode.LOCATION_SET_FAILED
+
+
+@pytest.mark.asyncio
+async def test_tunnel_constructor_failure_returns_stable_error(monkeypatch) -> None:
+    def fail_tunnel(**_):
+        raise MuxException()
+
+    monkeypatch.setattr(device_module, "PreferredRsdTunnel", fail_tunnel)
+    descriptor = DeviceDescriptor(identifier="test", ios_version="26.5")
+
+    with pytest.raises(GeoPortError) as raised:
+        await PymobileDeviceConnection.open(descriptor)
+
+    assert raised.value.code == ErrorCode.TUNNEL_UNAVAILABLE
 
 
 @pytest.mark.asyncio
@@ -149,3 +180,30 @@ async def test_connection_close_is_idempotent_and_set_failure_is_translated() ->
     await connection.close()
     await connection.close()
     assert stack.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_failure_is_translated_without_false_success() -> None:
+    class FakeStack:
+        async def aclose(self) -> None:
+            return None
+
+    class FailingLocation:
+        async def set(self, *_: float) -> None:
+            return None
+
+        async def clear(self) -> None:
+            raise DvtException("clear failed")
+
+    descriptor = DeviceDescriptor(identifier="test", ios_version="26.5")
+    connection = PymobileDeviceConnection(
+        descriptor,
+        FakeStack(),  # type: ignore[arg-type]
+        FailingLocation(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(GeoPortError) as raised:
+        await connection.clear_location()
+
+    assert raised.value.code == ErrorCode.LOCATION_CLEAR_FAILED
+    await connection.close()
