@@ -2,126 +2,142 @@
 
 Date: 2026-09-10
 
-The purpose of this matrix is to prevent the modernization from reproducing the known failure modes of legacy GeoPort. Automated tests use fake adapters wherever possible. Hardware tests prove the real `pymobiledevice3` integration.
+This matrix separates **specified behavior**, **automated test existence**, and **observed PASS evidence**.
 
-## 1. Severity
+`TEST EXISTS` means a test is committed on `geoportlocal-modernization`; it does **not** mean that test has passed in the target locked Python 3.14 environment. GitHub-only work cannot mark local or hardware results PASS.
 
-- **P0** — can leave device/application in an unsafe or unusable state, falsely reports a successful location operation, or corrupts/blocks future sessions.
-- **P1** — core connect/set/clear workflow fails or leaks resources.
-- **P2** — degraded diagnostics, fuel data, UI, packaging or compatibility.
+Severity:
 
-A regular-use build requires zero open P0 defects and no unresolved P1 in the declared supported Mac/iOS matrix.
+- **P0** — false success, stale/corrupt session ownership, or failure that can leave the core device workflow unsafe/unusable;
+- **P1** — core connect/set/clear, isolation or resource-lifecycle failure;
+- **P2** — degraded diagnostics, UI, fuel, packaging or compatibility.
 
-## 2. Unit tests — SessionManager
+A regular-use build requires zero open P0 and no unresolved P1 in the declared primary Mac/iOS matrix.
 
-| ID | Severity | Scenario | Expected result |
+## 1. SessionManager automated regressions
+
+| ID | Sev | Scenario | Expected | Coverage before local gate |
+|---|---|---|---|---|
+| S01 | P0 | adapter connect raises | no cached connection; disconnected; typed error | TEST EXISTS |
+| S02 | P0 | connection construction fails after partial resource entry | partial resources unwind; no reusable session | TEST EXISTS at adapter ownership boundary (D07) |
+| S03 | P0 | set raises | never report simulating | TEST EXISTS |
+| S04 | P0 | set reports transport disconnect | invalidate/close session | TEST EXISTS |
+| S05 | P0 | clear reports transport disconnect | invalidate/close session | TEST EXISTS |
+| S06 | P0 | connect timeout | cancelled/cleaned; no reusable session | TEST EXISTS |
+| S07 | P0 | set timeout | no success; uncertain session invalidated | TEST EXISTS |
+| S08 | P0 | concurrent connect calls | one serialized owned connection | TEST EXISTS |
+| S09 | P0 | set and clear overlap | deterministic serialization | TEST EXISTS |
+| S10 | P1 | clear while READY | idempotent; no unnecessary upstream call | TEST EXISTS |
+| S11 | P1 | disconnect while disconnected | idempotent | TEST EXISTS |
+| S12 | P1 | disconnect while READY | close once; no clear required | TEST EXISTS |
+| S13 | P1 | disconnect while SIMULATING | clear attempted then close | TEST EXISTS |
+| S14 | P1 | clear fails during disconnect | close still runs; diagnostic preserved | TEST EXISTS |
+| S15 | P1 | reconnect after failed session | new connect attempt succeeds; stale failure not reused | TEST EXISTS |
+| S16 | P1 | 100 connect/disconnect cycles | every fresh connection closes once | TEST EXISTS |
+| S17 | P1 | 100 set/clear cycles | no extra connection creation; deterministic counts | TEST EXISTS |
+| S18 | P2 | set while disconnected | typed invalid state; adapter untouched | TEST EXISTS |
+
+Primary file: `tests/test_session.py`.
+
+## 2. pymobiledevice adapter regressions
+
+| ID | Sev | Scenario | Expected | Coverage before local gate |
+|---|---|---|---|---|
+| D01 | P1 | USB enumeration | stable device descriptor path | TEST EXISTS |
+| D02 | P1 | metadata lookup fails | discovered device remains visible with nullable metadata | TEST EXISTS |
+| D03 | P1 | USB/network duplicate | one identifier; USB preferred | TEST EXISTS |
+| D04 | P1 | modern iOS version | modern version gate accepted | TEST EXISTS |
+| D05 | P1 | iOS 17.0-17.3.1 | explicit unsupported compatibility result | TEST EXISTS |
+| D06 | P1 | tunnel constructor fails | typed tunnel error; no connection returned | TEST EXISTS |
+| D07 | P0 | inner location context fails after tunnel/DVT enter | reverse cleanup; no connection returned | TEST EXISTS |
+| D08 | P0 | location set raises | translated error; no false success | TEST EXISTS |
+| D09 | P0 | location clear raises | translated error; no false clear | TEST EXISTS |
+| D10 | P1 | close called twice | idempotent underlying close | TEST EXISTS |
+| D11 | P2 | full identifier appears in dependency text | normal formatter redacts it | TEST EXISTS in logging tests |
+
+These tests mock the dependency boundary. They do not prove real `PreferredRsdTunnel`, DVT or LocationSimulation behavior on the user's phone.
+
+Primary files: `tests/test_pymobiledevice_adapter.py`, `tests/test_logging.py`.
+
+## 3. API contract regressions
+
+| ID | Sev | Scenario | Expected | Coverage before local gate |
+|---|---|---|---|---|
+| A01 | P0 | connect fails | non-2xx stable envelope; never ready | TEST EXISTS |
+| A02 | P0 | set fails | non-2xx `LOCATION_SET_FAILED`; never simulating | TEST EXISTS |
+| A03 | P0 | clear fails | non-2xx; never claim ready | TEST EXISTS |
+| A04 | P1 | set before connect | `INVALID_STATE`; adapter untouched | TEST EXISTS |
+| A05 | P1 | latitude out of range | validation failure; no device call | TEST EXISTS |
+| A06 | P1 | longitude out of range | validation failure; no device call | TEST EXISTS |
+| A07 | P1 | NaN/non-finite coordinate | validation failure | TEST EXISTS |
+| A08 | P1 | connect -> set -> status -> clear -> disconnect | authoritative state sequence | TEST EXISTS |
+| A09 | P1 | health without phone/Internet dependency | health remains local-only | TEST EXISTS |
+| A10 | P1 | fuel provider unavailable | device API remains functional | TEST EXISTS |
+| A11 | P2 | unexpected internal exception | sanitized JSON `INTERNAL_ERROR`; no raw exception string | TEST EXISTS |
+| A12 | P1 | presence probe proves selected device absent | status invalidates session | TEST EXISTS |
+| A13 | P1 | presence probe cannot determine state | healthy cached session not destroyed from uncertainty alone | TEST EXISTS |
+
+Primary files: `tests/test_api.py`, `tests/test_fuel_api.py`.
+
+## 4. Fuel provider/service regressions
+
+| ID | Sev | Scenario | Expected | Coverage before local gate |
+|---|---|---|---|---|
+| F01 | P1 | valid provider payload | normalized quotes | TEST EXISTS |
+| F02 | P1 | connect timeout | two attempts total then unavailable | TEST EXISTS |
+| F03 | P1 | read timeout | two attempts total then unavailable | TEST EXISTS |
+| F04 | P1 | 5xx then success | one retry then current snapshot | TEST EXISTS |
+| F05 | P1 | client 4xx | no retry; non-retryable unavailable | TEST EXISTS |
+| F06 | P1 | malformed JSON | invalid-response error | TEST EXISTS |
+| F07 | P1 | missing required schema fields | invalid-response error; no KeyError leak | TEST EXISTS |
+| F08 | P1 | unknown fuel type | explicit no-quote result | TEST EXISTS |
+| F09 | P2 | last-good cache then outage | stale snapshot explicitly marked | TEST EXISTS |
+| F10 | P2 | outage with no usable cache | fuel API unavailable; device API unaffected | TEST EXISTS |
+| F11 | P2 | provider coordinate out of range | response rejected | TEST EXISTS |
+
+Primary files: `tests/test_fuel.py`, `tests/test_fuel_api.py`.
+
+## 5. Local-server/browser security regressions
+
+| ID | Sev | Scenario | Expected | Coverage before local gate |
+|---|---|---|---|---|
+| L01 | P0 | launcher listener | loopback only | TEST EXISTS |
+| L02 | P1 | preferred port occupied | atomically reserve another loopback port; do not kill owner | TEST EXISTS |
+| L03 | P1 | explicit port occupied | fail clearly; do not kill owner | TEST EXISTS |
+| L04 | P1 | browser/static page | local JS/CSS served; no remote executable JS dependency | TEST EXISTS + source inspection |
+| L05 | P1 | hostile/non-loopback Host | reject request | TEST EXISTS |
+| L06 | P1 | cross-site browser mutation | reject before changing device state | TEST EXISTS |
+| L07 | P1 | CSP | script/connect restricted to self; only OSM tile images allowed remotely | TEST EXISTS |
+| L08 | P2 | browser hardening headers | nosniff/frame/referrer/permissions policy present | TEST EXISTS |
+| L09 | P1 | external network unavailable | local health/device workflow must remain usable | HARDWARE/LOCAL ONLY |
+| L10 | P1 | invalid TLS/provider certificate | TLS verification must remain enabled | DEPENDENCY/LOCAL CHECK; no code path disables verification |
+| L11 | P2 | unexpected request fields | rejected without state corruption | TEST EXISTS |
+
+The runtime also no longer creates a helper thread to launch the browser; the already-listening socket queues an early browser request until uvicorn starts accepting.
+
+Primary files: `tests/test_bootstrap.py`, `src/geoportlocal/runtime/security.py`.
+
+## 6. Browser/UI qualification
+
+A browser automation framework is intentionally not added merely for this alpha. API tests prove server truth; the following are checked in the actual browser during local qualification.
+
+| ID | Sev | Scenario | Expected |
 |---|---|---|---|
-| S01 | P0 | adapter connect raises | no connection cached; final local state disconnected; typed error returned |
-| S02 | P0 | adapter returns partially constructed connection then raises | partial object closed; no session cached |
-| S03 | P0 | set_location raises immediately | caller receives failure; state is not simulating |
-| S04 | P0 | set_location transport disconnect | session invalidated and closed; state disconnected |
-| S05 | P0 | clear_location transport disconnect | local resources still close; no stale session remains |
-| S06 | P0 | connect timeout | operation cancelled/cleaned; no reusable session created |
-| S07 | P0 | set timeout | no success response; connection classified according to adapter health/failure |
-| S08 | P0 | two concurrent connect calls | mutation lock serializes/rejects second operation; never two owned sessions |
-| S09 | P0 | set and clear submitted concurrently | deterministic serialization; state cannot become contradictory |
-| S10 | P1 | clear while already READY | succeeds idempotently; no upstream set/clear call required unless contract requires it |
-| S11 | P1 | disconnect while disconnected | succeeds idempotently |
-| S12 | P1 | disconnect while ready | connection closes once; state disconnected |
-| S13 | P1 | disconnect while simulating | clear attempted, close always attempted; state disconnected |
-| S14 | P1 | clear fails during disconnect | close still executes; final state disconnected with diagnostic |
-| S15 | P1 | reconnect after failed session | new adapter connection created; stale object never reused |
-| S16 | P1 | 100 connect/disconnect cycles using fake adapter | live connection count returns to zero every cycle |
-| S17 | P1 | 100 set/clear cycles | no task/resource count growth in fake adapter instrumentation |
-| S18 | P2 | invalid transition e.g. set while disconnected | typed invalid-state error; no adapter call |
+| U01 | P0 | backend set fails | UI never shows success/simulating |
+| U02 | P1 | partial metadata | discovered device remains selectable/understandable |
+| U03 | P1 | disconnected | set/clear disabled |
+| U04 | P1 | ready | set enabled; clear disabled |
+| U05 | P1 | simulating | clear enabled; state visible |
+| U06 | P1 | operation in progress | duplicate mutating actions disabled |
+| U07 | P1 | fuel provider down | device controls remain usable |
+| U08 | P2 | map tiles unavailable | coordinate entry and device controls remain usable |
+| U09 | P2 | fuel quote selected | coordinates fill; device location is not applied automatically |
 
-## 3. Unit tests — device adapter
+`src/geoportlocal/web/static/app.js` polls device status about every 2.5 seconds only while a session exists. It derives action availability from the latest server snapshot.
 
-These tests mock or fake the public dependency boundary rather than the HTTP layer.
+## 7. Hardware matrix
 
-| ID | Severity | Scenario | Expected result |
-|---|---|---|---|
-| D01 | P1 | USB device enumeration succeeds | stable `DeviceDescriptor` returned |
-| D02 | P1 | device exists but metadata lookup fails | device is not silently dropped; descriptor/diagnostic reflects partial metadata |
-| D03 | P1 | duplicate USB/network representations | deterministic selection/presentation; no duplicate session ownership |
-| D04 | P1 | iOS >=17.4 | modern RSD connection path selected |
-| D05 | P1 | iOS 17.0-17.3.1 before compatibility adapter exists | explicit `IOS_VERSION_UNSUPPORTED`/compatibility message, not a broken tunnel attempt |
-| D06 | P1 | modern tunnel constructor fails | typed `TUNNEL_UNAVAILABLE`; all entered contexts unwound |
-| D07 | P0 | DVT opens but LocationSimulation context fails | DVT and tunnel close; no connection returned |
-| D08 | P0 | location `set()` raises | error translated; no success value |
-| D09 | P0 | location `clear()` raises | error translated; no false clear claim |
-| D10 | P1 | `close()` called twice | no crash; resources closed once/idempotently |
-| D11 | P2 | full UDID appears in exception | normal logger redacts it before INFO/WARNING output |
-
-## 4. API contract tests
-
-All API tests run with `FakeDeviceAdapter`; they do not require a phone.
-
-| ID | Severity | Request | Expected result |
-|---|---|---|---|
-| A01 | P0 | connect when fake adapter fails | non-2xx appropriate error + stable error envelope; never `ready` |
-| A02 | P0 | POST location when fake set fails | non-2xx + `LOCATION_SET_FAILED`; never `simulating` |
-| A03 | P0 | DELETE location when fake clear fails | non-2xx + `LOCATION_CLEAR_FAILED` or disconnect classification |
-| A04 | P1 | POST location before connect | invalid-state response; adapter untouched |
-| A05 | P1 | latitude > 90 | validation error; adapter untouched |
-| A06 | P1 | longitude > 180 | validation error; adapter untouched |
-| A07 | P1 | NaN/infinity coordinate | validation error |
-| A08 | P1 | connect -> set -> status -> clear -> disconnect | states `ready -> simulating -> simulating -> ready -> disconnected` |
-| A09 | P1 | health with no device and no Internet | health still `ok` |
-| A10 | P1 | fuel provider unavailable | device API still passes all tests |
-| A11 | P2 | unknown internal exception | sanitized `INTERNAL_ERROR`; raw stack not returned to browser |
-
-Note: API test IDs use `Axx`; they are unrelated to any third-party application's A01/A09 codes.
-
-## 5. Fuel provider tests
-
-| ID | Severity | Scenario | Expected result |
-|---|---|---|---|
-| F01 | P1 | valid Project Zero Three payload | normalized quotes returned |
-| F02 | P1 | HTTP connect timeout | `FUEL_PROVIDER_UNAVAILABLE`; one bounded retry only |
-| F03 | P1 | HTTP read timeout | same as above |
-| F04 | P1 | HTTP 500 then success | retry succeeds; response marked current |
-| F05 | P1 | HTTP 400 | no retry unless provider contract says otherwise |
-| F06 | P1 | malformed JSON | `FUEL_PROVIDER_INVALID_RESPONSE`; no crash |
-| F07 | P1 | missing `regions` | validation failure, not KeyError leaking to UI |
-| F08 | P1 | unknown/missing fuel-type entry | empty/not-found result with clear state |
-| F09 | P2 | last-good cache exists and provider times out | cached response may be returned with `stale=true` |
-| F10 | P2 | no cache and provider times out | fuel UI shows unavailable; device UI unaffected |
-| F11 | P2 | coordinates outside valid ranges | provider response rejected |
-
-## 6. Local-server/security tests
-
-| ID | Severity | Scenario | Expected result |
-|---|---|---|---|
-| L01 | P0 | start application | server listens on loopback only by default |
-| L02 | P1 | preferred port occupied | GeoPortLocal binds another free local port without killing existing process |
-| L03 | P1 | old GeoPort process running | GeoPortLocal starts independently and does not terminate it |
-| L04 | P1 | GeoPortLocal exits | old GeoPort remains alive |
-| L05 | P1 | external network unavailable | local UI and device endpoints still load |
-| L06 | P1 | TLS certificate invalid for fuel provider | request fails; TLS verification is not disabled |
-| L07 | P2 | debug mode default | off |
-| L08 | P2 | request contains arbitrary unexpected fields | ignored/rejected according to schema; no state corruption |
-
-## 7. Browser/UI tests
-
-Initial automation may use API-level tests plus a small browser smoke suite.
-
-| ID | Severity | Scenario | Expected result |
-|---|---|---|---|
-| U01 | P0 | backend set fails | UI never shows successful/simulating state |
-| U02 | P1 | device list metadata partial | discovered device remains visible with useful diagnostic |
-| U03 | P1 | backend state disconnected | simulate/clear disabled |
-| U04 | P1 | backend state ready | simulate enabled, clear disabled |
-| U05 | P1 | backend state simulating | clear enabled and state visible |
-| U06 | P1 | operation in progress | duplicate mutating clicks disabled |
-| U07 | P1 | fuel provider down | map/device control remains usable |
-| U08 | P2 | no Internet/map tile access | app still exposes coordinate entry and device controls rather than blank fatal page |
-
-## 8. Hardware smoke matrix
-
-Record each actual run here. Do not infer support from upstream docs alone.
-
-Columns to complete during local work:
+Record actual runs here. Never infer PASS from upstream documentation or committed unit tests.
 
 | Host | Host version | Device | iOS | Connection | Discover | Connect | Set | Clear | 20x set/clear | Unplug recovery | Result | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -130,108 +146,81 @@ Columns to complete during local work:
 
 Add rows only for hardware actually tested.
 
-## 9. Mandatory physical test scripts
+## 8. Ordered physical checks
 
-### H01 — cold connect
+### H01 — cold connect/set/clear
 
-1. Quit GeoPortLocal.
-2. Ensure old GeoPort may remain installed but is not controlling the same device.
-3. Attach trusted iPhone via USB.
-4. Launch GeoPortLocal.
-5. Discover.
-6. Connect.
-7. Set a test coordinate.
-8. Verify with a neutral device-side location display suitable for testing.
-9. Clear.
-10. Verify real device location resumes.
-11. Disconnect.
+1. Launch GeoPortLocal with no phone; page and health must load.
+2. Attach unlocked trusted iPhone by USB.
+3. Refresh and connect.
+4. Set a test coordinate.
+5. Independently verify device-reported location changed.
+6. Clear and verify real location resumes.
+7. Disconnect.
 
-Pass: every UI state agrees with the actual device operation; no manual restart required.
+Pass: UI state agrees with completed device operations and no restart is required.
 
 ### H02 — repeated lifecycle
 
-Run 20 cycles:
+Run 20 set/clear cycles, then five disconnect/reconnect cycles.
 
-```text
-set coordinate A
-clear
-set coordinate B
-clear
-```
+Pass: no progressive slowdown, stale connection, growing process/thread/socket count or address-in-use failure.
 
-Then disconnect/reconnect five times.
+### H03 — unplug while READY
 
-Pass:
-- no progressive slowdown;
-- no growing console spam;
-- no address-in-use error;
-- no stale-session reuse;
-- no application restart required.
+Connect to READY, unplug, wait for status polling, then reattach and reconnect.
 
-### H03 — unplug during READY
-
-1. Connect until READY.
-2. Physically unplug device.
-3. Request status / attempt set.
-4. Reattach device.
-5. Rediscover and reconnect.
-
-Pass: old session is invalidated; reconnect creates a new connection and succeeds without restarting GeoPortLocal.
+Pass: old session is invalidated and a fresh connection is created without restarting GeoPortLocal.
 
 ### H04 — unplug while SIMULATING
 
-1. Connect.
-2. Set location successfully.
-3. Unplug device.
-4. Observe state.
-5. Reattach.
-6. Reconnect.
-7. Clear if the OS still reports simulation active.
+Set location, unplug, observe the next status/operation, then reattach/reconnect.
 
-Pass: GeoPortLocal does not retain a fake READY/SIMULATING session after transport loss.
+Pass: GeoPortLocal does not retain a fake READY/SIMULATING session. Record what the phone does with the simulated location after physical transport loss; do not guess it.
 
-### H05 — old GeoPort coexistence
+### H05 — legacy coexistence and port collision
 
-1. Keep existing legacy application installed.
-2. Launch/quit old GeoPort.
-3. Launch GeoPortLocal.
-4. Repeat in the reverse order, but never ask both programs to own the same device session simultaneously.
+Keep legacy GeoPort installed. Exercise launch/quit order both ways and deliberately occupy preferred port 54321.
 
-Pass: neither application kills the other by process-name matching; bundle/config/log paths do not overwrite each other.
+Pass: GeoPortLocal uses its own loopback listener/bundle identity and never kills/overwrites the other application.
 
 ### H06 — offline resilience
 
-1. Disconnect Mac from Internet.
-2. Launch GeoPortLocal.
-3. Discover/connect/set/clear using USB.
-4. Open fuel view.
+Disconnect Internet and use direct coordinates for the device workflow.
 
-Pass: device functions work; fuel view reports provider unavailable/stale; app does not hang on IP geolocation, GitHub broadcast, fuel or map requests.
+Pass: health/device controls continue; map tiles/fuel degrade without blocking local device operations.
 
-## 10. Resource-leak checks
+### H07 — localhost browser boundary
 
-During local qualification capture before/after values for:
+With the local page open, confirm the browser console shows no CSP violation for normal operation and no remote script is loaded. Verify map tile requests are images from `tile.openstreetmap.org` only.
+
+Pass: local UI works under the restrictive CSP.
+
+## 9. Resource-leak observations
+
+During local qualification capture before/after values where practical for:
 
 - GeoPortLocal process count;
-- Python/native child process count owned by the app;
+- child/native process count owned by the app;
 - thread count;
-- asyncio task count in debug diagnostics;
 - listening loopback ports;
-- open file descriptors/sockets where practical.
+- open descriptors/sockets.
 
-After repeated lifecycle tests, counts should return to a stable baseline. A bounded cache or server worker may remain; per-operation growth is a failure.
+Counts should return to a stable baseline after repeated lifecycle tests. Per-operation growth is a failure.
 
-## 11. Release gate
+## 10. Release gate
 
-Do not publish a GitHub Release merely because unit tests pass.
+Do not publish a GitHub Release because tests merely exist.
 
-First usable local alpha requires:
+First private regular-use alpha requires:
 
-- all automated P0/P1 tests passing;
-- H01-H06 completed on the primary Mac/iPhone pair;
-- no false-success case;
-- no stale session after unplug/reconnect;
-- old GeoPort preserved side-by-side;
-- known limitations documented.
+- generated and committed `uv.lock`;
+- `uv sync --locked`, Ruff and full pytest PASS on the target Mac;
+- H01-H07 observed on the primary setup as applicable;
+- no false-success result;
+- no stale logical session after unplug/reconnect;
+- legacy GeoPort preserved side-by-side;
+- no unresolved P0/P1 in the declared primary matrix;
+- limitations documented precisely.
 
-Windows packaging/testing is a separate gate and does not block the first private Mac alpha unless the founder changes priority.
+Windows packaging/testing is a later gate and does not block the first private Mac alpha unless priority changes.
