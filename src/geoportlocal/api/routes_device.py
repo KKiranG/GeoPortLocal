@@ -36,14 +36,8 @@ async def connect_device(request: Request, body: ConnectRequest) -> dict[str, ob
 @router.get("/device/status")
 async def device_status(request: Request) -> dict[str, object]:
     manager = _manager(request)
-    snapshot = manager.snapshot
     probe = _presence_probe(request)
-
-    if snapshot.device is not None and probe is not None:
-        present = await probe(snapshot.device.identifier)
-        if present is False:
-            snapshot = await manager.disconnect()
-
+    snapshot = await manager.check_presence(probe) if probe is not None else manager.snapshot
     return snapshot_payload(snapshot)
 
 
