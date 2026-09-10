@@ -1,0 +1,71 @@
+{
+  "head_sha": "db887b722b0c1afd7228e63d324119309c14ae12",
+  "tests_passed": 71,
+  "tests_failed": 0,
+  "tests_skipped": 0,
+  "test_command": "uv run pytest",
+  "hardware": {
+    "host_machine": "MacBook Air (Apple M2, 16GB)",
+    "host_os": "macOS 26.5.1 (Build 25F80)",
+    "usbmux_devices": [],
+    "status": "BLOCKED / PENDING HARDWARE (no physical iPhone attached over USB)"
+  },
+  "package": {
+    "path": "dist/GeoPortLocal.app",
+    "arch": "arm64",
+    "bundle_identifier": "io.github.kkirang.geoportlocal",
+    "status": "PASS (verified startup, loopback binding, static assets, health, status, clean shutdown)"
+  },
+  "fixes": [
+    {
+      "file": "pyproject.toml",
+      "reason": "Excluded legacy src/main.py from Ruff linting"
+    },
+    {
+      "file": "src/geoportlocal/api/errors.py",
+      "reason": "Preserved HTTP 422 for RequestValidationError in standardized error envelope"
+    },
+    {
+      "file": "src/geoportlocal/runtime/logging.py",
+      "reason": "Reordered regex substitution so _LABELLED_IDENTIFIER runs before _MODERN_UDID ensuring correct label redaction"
+    },
+    {
+      "file": "src/geoportlocal/device/session.py",
+      "reason": "Added noqa ASYNC109 to internal _run helper timeout parameter"
+    },
+    {
+      "file": "src/geoportlocal/app.py",
+      "reason": "Import formatting and wrapped line >100 chars"
+    },
+    {
+      "file": "src/geoportlocal/device/pymobiledevice.py",
+      "reason": "Wrapped lines >100 chars"
+    },
+    {
+      "file": "src/geoportlocal/fuel/service.py",
+      "reason": "Wrapped __init__ line >100 chars"
+    },
+    {
+      "file": "tests/test_fuel.py",
+      "reason": "Wrapped lines >100 chars"
+    },
+    {
+      "file": "tests/test_session.py",
+      "reason": "Wrapped lines >100 chars"
+    }
+  ],
+  "blockers": [
+    "H01-H04 physical iPhone tests require an unlocked iPhone running iOS 17.4+ with Developer Mode enabled physically connected via USB"
+  ],
+  "pushed": true,
+  "commits": [
+    {
+      "sha": "4ec82fd142fa676f86d303841f627b18278c390a",
+      "subject": "fix: resolve Python 3.14 baseline lint and validation contract failures"
+    },
+    {
+      "sha": "db887b722b0c1afd7228e63d324119309c14ae12",
+      "subject": "docs: record Hermes local execution qualification results and packet files"
+    }
+  ]
+}
