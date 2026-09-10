@@ -231,6 +231,37 @@ def test_status_invalidates_idle_session_when_presence_probe_proves_absent() -> 
     assert status.status_code == 200
     assert status.json()["state"] == "disconnected"
     assert status.json()["device"] is None
+    assert status.json()["last_error"]["code"] == "DEVICE_DISCONNECTED"
+    assert connection.close_calls == 1
+
+
+def test_status_absence_while_simulating_skips_impossible_clear() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(descriptor)
+
+    async def absent(_: str) -> bool:
+        return False
+
+    app = create_app(
+        FakeAdapter(descriptor, connection=connection),
+        presence_probe=absent,
+    )
+
+    with TestClient(app) as client:
+        client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        simulated = client.post(
+            "/api/location",
+            json={"latitude": -33.8688, "longitude": 151.2093},
+        )
+        assert simulated.json()["state"] == "simulating"
+
+        status = client.get("/api/device/status")
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "disconnected"
+    assert status.json()["location"] is None
+    assert status.json()["last_error"]["code"] == "DEVICE_DISCONNECTED"
+    assert connection.clear_calls == 0
     assert connection.close_calls == 1
 
 
