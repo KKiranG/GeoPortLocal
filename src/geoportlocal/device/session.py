@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import TypeVar
@@ -10,8 +12,10 @@ from typing import TypeVar
 from geoportlocal.device.adapter import DeviceAdapter, DeviceConnection
 from geoportlocal.domain.device import DeviceDescriptor, DeviceState, Location, SessionSnapshot
 from geoportlocal.domain.errors import ErrorCode, GeoPortError, InvalidStateError
+from geoportlocal.runtime.logging import redact_identifier
 
 T = TypeVar("T")
+_LOGGER = logging.getLogger("geoportlocal.device.session")
 
 _TRANSPORT_FAILURES = {
     ErrorCode.DEVICE_DISCONNECTED,
@@ -53,6 +57,7 @@ class SessionManager:
 
     async def discover(self) -> list[DeviceDescriptor]:
         async with self._operation_lock:
+            started = time.perf_counter()
             connected_state = self._state if self._connection is not None else None
             if connected_state is None:
                 self._state = DeviceState.DISCOVERING
@@ -67,6 +72,11 @@ class SessionManager:
                 self._last_error = error
                 if connected_state is None:
                     self._state = DeviceState.DISCONNECTED
+                _LOGGER.warning(
+                    "device_discovery_failed code=%s duration_ms=%d",
+                    error.code.value,
+                    _elapsed_ms(started),
+                )
                 raise
 
             self._last_error = None
@@ -74,6 +84,11 @@ class SessionManager:
                 self._state = DeviceState.DISCOVERED if devices else DeviceState.DISCONNECTED
             else:
                 self._state = connected_state
+            _LOGGER.info(
+                "device_discovery_succeeded count=%d duration_ms=%d",
+                len(devices),
+                _elapsed_ms(started),
+            )
             return devices
 
     async def connect(self, identifier: str) -> SessionSnapshot:
@@ -85,6 +100,8 @@ class SessionManager:
             )
 
         async with self._operation_lock:
+            masked_identifier = redact_identifier(identifier)
+            started = time.perf_counter()
             if self._connection is not None:
                 if self._device and self._device.identifier == identifier and self._state in {
                     DeviceState.READY,
@@ -93,6 +110,7 @@ class SessionManager:
                     return self.snapshot
                 raise InvalidStateError("connect another device", self._state.value)
 
+            _LOGGER.info("connect_started device=%s", masked_identifier)
             self._state = DeviceState.CONNECTING
             self._device = None
             self._location = None
@@ -106,6 +124,12 @@ class SessionManager:
             except GeoPortError as error:
                 self._last_error = error
                 self._state = DeviceState.DISCONNECTED
+                _LOGGER.warning(
+                    "connect_failed device=%s code=%s duration_ms=%d",
+                    masked_identifier,
+                    error.code.value,
+                    _elapsed_ms(started),
+                )
                 raise
 
             if connection.descriptor.identifier != identifier:
@@ -116,12 +140,23 @@ class SessionManager:
                 )
                 self._last_error = error
                 self._state = DeviceState.DISCONNECTED
+                _LOGGER.error(
+                    "connect_failed device=%s code=%s duration_ms=%d",
+                    masked_identifier,
+                    error.code.value,
+                    _elapsed_ms(started),
+                )
                 raise error
 
             self._connection = connection
             self._device = connection.descriptor
             self._last_error = None
             self._state = DeviceState.READY
+            _LOGGER.info(
+                "connect_succeeded device=%s duration_ms=%d",
+                masked_identifier,
+                _elapsed_ms(started),
+            )
             return self.snapshot
 
     async def set_location(self, location: Location) -> SessionSnapshot:
@@ -130,6 +165,8 @@ class SessionManager:
             if self._state not in {DeviceState.READY, DeviceState.SIMULATING}:
                 raise InvalidStateError("set location", self._state.value)
 
+            started = time.perf_counter()
+            masked_identifier = redact_identifier(connection.descriptor.identifier)
             previous_state = self._state
             previous_location = self._location
             self._state = DeviceState.SETTING_LOCATION
@@ -147,11 +184,22 @@ class SessionManager:
                     self._state = previous_state
                     self._location = previous_location
                     self._last_error = error
+                _LOGGER.warning(
+                    "location_set_failed device=%s code=%s duration_ms=%d",
+                    masked_identifier,
+                    error.code.value,
+                    _elapsed_ms(started),
+                )
                 raise
 
             self._location = location
             self._last_error = None
             self._state = DeviceState.SIMULATING
+            _LOGGER.info(
+                "location_set_succeeded device=%s duration_ms=%d",
+                masked_identifier,
+                _elapsed_ms(started),
+            )
             return self.snapshot
 
     async def clear_location(self) -> SessionSnapshot:
@@ -165,6 +213,8 @@ class SessionManager:
             if self._state != DeviceState.SIMULATING:
                 raise InvalidStateError("clear location", self._state.value)
 
+            started = time.perf_counter()
+            masked_identifier = redact_identifier(connection.descriptor.identifier)
             previous_location = self._location
             self._state = DeviceState.CLEARING
 
@@ -181,11 +231,22 @@ class SessionManager:
                     self._state = DeviceState.SIMULATING
                     self._location = previous_location
                     self._last_error = error
+                _LOGGER.warning(
+                    "location_clear_failed device=%s code=%s duration_ms=%d",
+                    masked_identifier,
+                    error.code.value,
+                    _elapsed_ms(started),
+                )
                 raise
 
             self._location = None
             self._last_error = None
             self._state = DeviceState.READY
+            _LOGGER.info(
+                "location_clear_succeeded device=%s duration_ms=%d",
+                masked_identifier,
+                _elapsed_ms(started),
+            )
             return self.snapshot
 
     async def disconnect(self) -> SessionSnapshot:
@@ -195,6 +256,8 @@ class SessionManager:
                 self._reset_local_state(preserve_error=False)
                 return self.snapshot
 
+            started = time.perf_counter()
+            masked_identifier = redact_identifier(connection.descriptor.identifier)
             previous_state = self._state
             cleanup_error: GeoPortError | None = None
             self._state = DeviceState.DISCONNECTING
@@ -220,6 +283,13 @@ class SessionManager:
 
             self._reset_local_state(preserve_error=True)
             self._last_error = cleanup_error
+            log_method = _LOGGER.warning if cleanup_error else _LOGGER.info
+            log_method(
+                "disconnect_completed device=%s cleanup_code=%s duration_ms=%d",
+                masked_identifier,
+                cleanup_error.code.value if cleanup_error else "none",
+                _elapsed_ms(started),
+            )
             return self.snapshot
 
     async def shutdown(self) -> None:
@@ -277,3 +347,7 @@ class SessionManager:
                 retryable=False,
                 cause=exc,
             ) from exc
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
