@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 
 from geoportlocal.api.models import ConnectRequest, LocationRequest
 from geoportlocal.api.serialization import device_payload, snapshot_payload
+from geoportlocal.device.presence import PresenceProbe
 from geoportlocal.device.session import SessionManager
 from geoportlocal.domain.device import Location
 
@@ -14,6 +15,10 @@ router = APIRouter(prefix="/api")
 
 def _manager(request: Request) -> SessionManager:
     return request.app.state.session_manager
+
+
+def _presence_probe(request: Request) -> PresenceProbe | None:
+    return getattr(request.app.state, "presence_probe", None)
 
 
 @router.get("/devices")
@@ -30,7 +35,16 @@ async def connect_device(request: Request, body: ConnectRequest) -> dict[str, ob
 
 @router.get("/device/status")
 async def device_status(request: Request) -> dict[str, object]:
-    return snapshot_payload(_manager(request).snapshot)
+    manager = _manager(request)
+    snapshot = manager.snapshot
+    probe = _presence_probe(request)
+
+    if snapshot.device is not None and probe is not None:
+        present = await probe(snapshot.device.identifier)
+        if present is False:
+            snapshot = await manager.disconnect()
+
+    return snapshot_payload(snapshot)
 
 
 @router.post("/location")
