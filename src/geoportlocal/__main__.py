@@ -35,7 +35,8 @@ def main() -> None:
         raise SystemExit("--port must be between 1 and 65535")
 
     uvicorn.run(
-        "geoportlocal.app:app",
+        "geoportlocal.app:create_app",
+        factory=True,
         host=DEFAULT_HOST,
         port=args.port,
         reload=False,
