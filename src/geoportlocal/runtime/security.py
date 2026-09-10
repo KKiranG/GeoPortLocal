@@ -63,10 +63,14 @@ def mutation_origin_allowed(request: Request) -> bool:
     ):
         return False
 
+    same_port = _effective_port(parsed_origin) == _effective_request_port(
+        request.url.scheme,
+        request_port,
+    )
     return (
         parsed_origin.scheme.casefold() == request.url.scheme.casefold()
         and parsed_origin.hostname.casefold() == request_host.casefold()
-        and _effective_port(parsed_origin) == _effective_request_port(request.url.scheme, request_port)
+        and same_port
     )
 
 
