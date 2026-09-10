@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 
 from geoportlocal import __version__
-from geoportlocal.app import create_app
 from geoportlocal.__main__ import DEFAULT_HOST, DEFAULT_PORT, build_parser
+from geoportlocal.app import create_app
 
 
 def test_health_endpoint_is_local_app_health_only() -> None:
