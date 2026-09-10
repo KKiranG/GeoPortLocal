@@ -39,6 +39,33 @@ def test_device_api_happy_path_tracks_authoritative_state() -> None:
         assert disconnected.json()["state"] == "disconnected"
 
 
+def test_disconnect_cleanup_failure_is_non_success_but_session_is_closed() -> None:
+    descriptor = make_descriptor()
+    connection = FakeConnection(
+        descriptor,
+        clear_error=GeoPortError(
+            ErrorCode.LOCATION_CLEAR_FAILED,
+            "Recovery clear failed during disconnect.",
+            retryable=True,
+        ),
+    )
+    adapter = FakeAdapter(descriptor, connection=connection)
+
+    with TestClient(create_app(adapter)) as client:
+        connected = client.post("/api/device/connect", json={"identifier": descriptor.identifier})
+        assert connected.status_code == 200
+
+        response = client.post("/api/device/disconnect")
+        status = client.get("/api/device/status")
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "LOCATION_CLEAR_FAILED"
+    assert status.json()["state"] == "disconnected"
+    assert status.json()["last_error"]["code"] == "LOCATION_CLEAR_FAILED"
+    assert connection.clear_calls == 1
+    assert connection.close_calls == 1
+
+
 def test_failed_set_never_returns_success_or_simulating_state() -> None:
     descriptor = make_descriptor()
     connection = FakeConnection(
@@ -232,6 +259,7 @@ def test_status_invalidates_idle_session_when_presence_probe_proves_absent() -> 
     assert status.json()["state"] == "disconnected"
     assert status.json()["device"] is None
     assert status.json()["last_error"]["code"] == "DEVICE_DISCONNECTED"
+    assert connection.clear_calls == 0
     assert connection.close_calls == 1
 
 
@@ -283,4 +311,5 @@ def test_status_preserves_session_when_presence_is_unknown() -> None:
 
     assert status.status_code == 200
     assert status.json()["state"] == "ready"
-    assert connection.close_calls == 1  # lifespan shutdown only
+    assert connection.clear_calls == 1  # lifespan recovery cleanup
+    assert connection.close_calls == 1  # lifespan shutdown
