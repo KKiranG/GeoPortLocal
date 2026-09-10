@@ -260,7 +260,12 @@ class SessionManager:
             cleanup_error: GeoPortError | None = None
             self._state = DeviceState.DISCONNECTING
 
-            if previous_state == DeviceState.SIMULATING:
+            # READY only means this process does not currently record a simulated
+            # coordinate. A previous crashed process may still have left simulation
+            # active on the phone, so normal disconnect/shutdown performs the same
+            # recovery-safe clear as an explicit Clear button. Confirmed physical
+            # absence uses check_presence() and intentionally skips this step.
+            if previous_state in {DeviceState.READY, DeviceState.SIMULATING}:
                 try:
                     await self._run(
                         connection.clear_location(),
