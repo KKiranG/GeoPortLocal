@@ -1,139 +1,68 @@
-# Codex / Astra handoff
+# Codex / Astra supporting handoff
 
 Date: 2026-09-10  
 Branch: `geoportlocal-modernization`
 
-The hardware-independent implementation is in the branch. The next useful work is local verification against the user's actual Mac/iPhone, not another broad redesign.
+The definitive local execution plan is now `docs/HERMES_LOCAL_HANDOFF.md`. Use this file only when a local Hermes phase delegates a bounded coding/diagnostic package to Codex/Astra.
 
-Start with root `AGENTS.md`, `docs/WORKLOG.md`, this handoff and only the required section of `docs/LOCAL_BOOTSTRAP.md`. Legacy `src/main.py` and `src/templates/map*.html` are reference material only.
+Read root `AGENTS.md`, the relevant phase in `docs/HERMES_LOCAL_HANDOFF.md`, and only the target source/tests. Do not rescan the whole legacy repository.
 
-## Session 1 — environment and deterministic fast gate
+## Mechanical environment/test work
 
-This is mechanical verification. Do **not** spend an Astra turn on it by default. Use the normal Codex model available to the user.
-
-Prompt:
+Use normal Codex for deterministic work such as lock generation, Ruff, pytest, JavaScript syntax checking and straightforward fixes.
 
 ```text
 Work only in KKiranG/GeoPortLocal on branch geoportlocal-modernization.
-Read AGENTS.md, docs/WORKLOG.md, and sections 2-4 of docs/LOCAL_BOOTSTRAP.md. Do not scan legacy src/main.py, legacy map templates, images, Git history or research docs unless a specific failure requires them.
+Read AGENTS.md and the current phase in docs/HERMES_LOCAL_HANDOFF.md.
 
-Goal: establish the exact local Python 3.14/uv baseline without redesigning anything.
+Goal: fix the already-observed local gate failure without redesigning the project.
 
-1. Confirm branch and clean working tree.
-2. Run `uv lock`, then `uv sync --locked`.
-3. Run `uv run ruff check .` and `uv run pytest`.
-4. Fix only real source/test/packaging-metadata failures revealed by those commands.
-5. Re-run the complete fast gate.
-6. Inspect uv.lock for the expected direct pins, especially pymobiledevice3==11.12.1 and pyinstaller==6.22.2.
-7. Commit uv.lock plus only necessary fixes in one focused commit.
+Reproduce the exact failing command, inspect only the target files and adjacent tests, implement the smallest evidence-backed fix, run the targeted check, then run bash scripts/check.sh. If app.js changed and Node is already installed, also run node --check src/geoportlocal/web/static/app.js.
 
-Do not upgrade dependencies, add features, change architecture or use subagents for routine failures.
-Return only commands/results, files changed and any remaining blocker.
+Do not upgrade dependencies, add features, alter the legacy app, weaken security/log redaction, or broaden compatibility without evidence. Report exact commands/results and files changed.
 ```
 
-Exit gate: locked sync + Ruff + full pytest are clean. If they are not, stay in this session until the smallest reproducible failure is fixed or precisely classified.
+## Real device integration work
 
-## Session 2 — source app and real iPhone
-
-Start with the normal Codex model. Escalate the same concrete failure to Astra only if the evidence shows a difficult tunnel/DVT/lifecycle problem or an architecture-sensitive repair.
-
-Prompt:
+Start with normal Codex. Escalate to Astra only after a reproducible `pymobiledevice3`/DVT/session-lifecycle failure remains genuinely ambiguous.
 
 ```text
-Continue on geoportlocal-modernization. Read AGENTS.md, docs/WORKLOG.md, section 5 of docs/LOCAL_BOOTSTRAP.md and only the relevant hardware rows in docs/TEST_MATRIX.md.
+Continue on geoportlocal-modernization. Read AGENTS.md, the relevant hardware phase in docs/HERMES_LOCAL_HANDOFF.md, the smallest redacted failure evidence, the target device/session module and adjacent tests.
 
-Goal: qualify the current source app and pymobiledevice3 adapter on this Mac/iPhone without adding features.
-
-Run `uv run geoportlocal --no-browser`, use the printed local URL, and walk the hardware sequence in order:
-- no-phone launch;
-- USB attach/discovery;
-- connect;
-- one location set with independent device-side verification;
-- clear;
-- 20 set/clear cycles;
-- unplug while READY and reconnect;
-- unplug while SIMULATING and reconnect;
-- clean shutdown/relaunch.
-
-For any failure:
-1. reproduce once;
-2. capture the smallest redacted evidence;
-3. classify it to usbmux metadata, trust/developer mode, PreferredRsdTunnel, DVT/LocationSimulation, SessionManager/API/UI, or another precise layer;
-4. fix only that layer;
-5. add/update the smallest regression test when practical;
-6. rerun `bash scripts/check.sh` after source changes.
-
-Preserve the project-owned adapter boundary. Never treat a third-party application's acceptance/rejection as the GeoPortLocal success oracle.
-Update only hardware rows actually observed. Do not mark unrun rows PASS.
+Classify the failure first: usbmux metadata, trust/developer mode, PreferredRsdTunnel, DVT/LocationSimulation, DDI availability, SessionManager/presence ownership, API/UI, or packaging. Fix only the demonstrated layer. Preserve truthful completion semantics and fresh-session recovery. Add the narrowest regression test and rerun bash scripts/check.sh plus the affected hardware scenario.
 ```
 
-Astra escalation prompt, only when needed:
+### Astra escalation
 
 ```text
-Use GPT-6 Astra for this already-reproduced GeoPortLocal integration failure only.
-Read AGENTS.md, the redacted failure evidence, the target module/adjacent tests and the relevant architecture/test section. Do not reopen the full legacy repository.
+Use Astra only for this already-reproduced GeoPortLocal integration failure. Do not perform a broad review.
 
-Determine whether the audited pymobiledevice3/tunnel lifecycle assumption is wrong on this Mac/iPhone or whether the bug is in GeoPortLocal ownership/error handling. Produce the smallest evidence-backed fix, targeted regression test, full fast-gate result and remaining hardware observation. No unrelated refactor.
+Read AGENTS.md, the redacted failure evidence, the target module/tests, and the relevant architecture/test-matrix section. Determine whether the pinned pymobiledevice3 assumption is wrong on this Mac/iPhone or GeoPortLocal owns the lifecycle incorrectly. Produce the smallest evidence-backed fix, targeted regression, full fast-gate result and exact remaining hardware observation. No unrelated refactor.
 ```
 
-## Session 3 — fuel/offline qualification
+## Intentional runtime decisions
 
-Use the normal Codex model unless a live provider schema change is genuinely ambiguous.
-
-Prompt:
-
-```text
-Read AGENTS.md, docs/WORKLOG.md and section 6 of docs/LOCAL_BOOTSTRAP.md.
-
-Goal: qualify fuel and offline degradation without touching device architecture.
-
-Verify live region/type/quote normalization, quote-to-coordinate selection without automatic device mutation, then disconnect Internet and prove local health/device controls remain independent. If Project Zero Three changed schema, inspect only the live response contract and fuel provider/tests, then make the narrowest normalization change.
-
-Run `bash scripts/check.sh` after source changes and record the live-provider observation without claiming provider availability is an application invariant.
-```
-
-## Session 4 — packaged app
-
-Run only after the source app passes the core hardware path. Use normal Codex first; escalate to Astra only for a non-obvious native/dynamic-import lifecycle failure.
-
-Prompt:
-
-```text
-Read AGENTS.md, docs/WORKLOG.md, section 7 of docs/LOCAL_BOOTSTRAP.md, packaging/GeoPortLocal.spec and only the packaging-specific failure evidence.
-
-Goal: produce and qualify dist/GeoPortLocal.app side-by-side with the existing GeoPort app.
-
-Run `bash scripts/build_macos.sh`. Fix only reproducible PyInstaller/data-file/dynamic-import/macOS bundle issues. Keep app name GeoPortLocal and bundle id io.github.kkirang.geoportlocal. Do not overwrite, rename, kill or modify the existing GeoPort application.
-
-Test packaged launch, actual dynamic loopback URL, device discover/connect/set/clear, shutdown and relaunch. Re-run the fast gate after source changes. Do not optimize bundle size until correctness is proven.
-```
-
-## Context and usage rules
-
-- one concrete outcome per session;
-- normal Codex for deterministic/mechanical work;
-- Astra only for difficult integration or architecture-sensitive uncertainty;
-- inspect target module + adjacent tests before broad search;
-- use `rg` for symbols instead of recursive dumps;
-- never preload both large legacy templates;
-- do not preload all research/OzBargain material for coding work;
-- no review swarm or duplicate agents;
-- no strong-model review when a narrow test already mechanically proves a low-risk change;
-- do not upgrade `pymobiledevice3`, Python or PyInstaller during qualification unless evidence specifically requires reevaluating that baseline.
-
-## Intentional architecture — do not redesign without evidence
+Do not redesign these without observed evidence:
 
 - Python 3.14 baseline;
 - FastAPI/uvicorn loopback-only backend;
 - local HTML/CSS/JavaScript UI;
-- project-owned map logic with remote image tiles only;
-- one SessionManager;
-- current public `pymobiledevice3` APIs only;
+- one `SessionManager` and one mutation lock;
 - `PreferredRsdTunnel -> DvtProvider -> LocationSimulation` for modern iOS;
-- iOS 17.4+ first;
-- Project Zero Three behind a provider boundary;
-- preferred 54321 with atomic alternate loopback-port reservation;
-- legacy GeoPort remains installed as fallback;
-- no third-party anti-abuse/geofence/device-integrity bypass work.
+- explicit Clear allowed from READY as a stale-simulation recovery command;
+- bounded presence probing: uncertainty preserves the session, confirmed absence invalidates it;
+- Project Zero Three isolated behind a provider/service boundary;
+- exact-origin browser mutation protection plus local Host validation;
+- restrictive CSP and `no-store` for authoritative HTML/API state;
+- OSM image tiles only, with `strict-origin-when-cross-origin` rather than suppressed Referer;
+- bounded redacted persistent logs under GeoPortLocal's own user log directory;
+- preferred port 54321 with atomic alternate loopback reservation;
+- installed legacy GeoPort remains untouched as fallback.
 
-A failed real observation can justify changing one of these. Novelty or preference cannot.
+## DDI rule
+
+Do not automatically add Developer Disk Image mounting. Only investigate it when a real DVT failure specifically points there. The local handoff contains the diagnostic command and acceptance rule.
+
+## Review rule
+
+After substantive runtime fixes, use one independent strong review focused only on false success, stale-session reuse, recovery-clear correctness, cleanup/resource leaks, presence races, `pymobiledevice3` API misuse, security regression and sensitive logging. Do not spend repeated reviews on formatting or mechanically proven changes.
