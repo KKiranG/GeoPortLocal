@@ -1,0 +1,48 @@
+[project]
+name = "geoportlocal"
+version = "0.1.0a0"
+description = "Local iOS location simulation and Australian fuel-price utility"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+  { name = "Kiran" },
+]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "jinja2>=3.1,<4",
+  "pydantic>=2.10,<3",
+  "pymobiledevice3==11.12.1",
+  "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+geoportlocal = "geoportlocal.__main__:main"
+
+[dependency-groups]
+dev = [
+  "pyinstaller==6.22.2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<2",
+  "ruff>=0.11,<1",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["geoportlocal*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
