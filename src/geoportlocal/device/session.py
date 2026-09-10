@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -15,6 +15,7 @@ from geoportlocal.domain.errors import ErrorCode, GeoPortError, InvalidStateErro
 from geoportlocal.runtime.logging import redact_identifier
 
 T = TypeVar("T")
+PresenceProbe = Callable[[str], Awaitable[bool | None]]
 _LOGGER = logging.getLogger("geoportlocal.device.session")
 
 _TRANSPORT_FAILURES = {
@@ -31,6 +32,7 @@ class SessionTimeouts:
     set_location: float = 10.0
     clear_location: float = 10.0
     disconnect: float = 5.0
+    presence: float = 2.0
 
 
 class SessionManager:
@@ -288,6 +290,40 @@ class SessionManager:
                 "disconnect_completed device=%s cleanup_code=%s duration_ms=%d",
                 masked_identifier,
                 cleanup_error.code.value if cleanup_error else "none",
+                _elapsed_ms(started),
+            )
+            return self.snapshot
+
+    async def check_presence(self, probe: PresenceProbe) -> SessionSnapshot:
+        """Atomically invalidate a session only when a bounded probe proves physical absence."""
+        async with self._operation_lock:
+            if self._connection is None or self._device is None:
+                return self.snapshot
+
+            identifier = self._device.identifier
+            try:
+                present = await asyncio.wait_for(
+                    probe(identifier),
+                    timeout=self._timeouts.presence,
+                )
+            except (TimeoutError, Exception):
+                # Presence is a liveness hint, not authority when the probe itself fails.
+                return self.snapshot
+
+            if present is not False:
+                return self.snapshot
+
+            started = time.perf_counter()
+            masked_identifier = redact_identifier(identifier)
+            error = GeoPortError(
+                ErrorCode.DEVICE_DISCONNECTED,
+                "The selected iOS device is no longer physically present.",
+                retryable=True,
+            )
+            await self._invalidate(error)
+            _LOGGER.warning(
+                "device_absence_invalidated device=%s duration_ms=%d",
+                masked_identifier,
                 _elapsed_ms(started),
             )
             return self.snapshot
