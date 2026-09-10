@@ -186,10 +186,10 @@ Run these in order and stop at the first failure:
 7. Independently verify the phone's system-reported location changed.
 8. Clear and independently verify normal location resumes.
 9. Run 20 set/clear cycles without restarting GeoPortLocal.
-10. Run five disconnect/reconnect cycles.
-11. While READY, unplug USB and wait for status polling. The session must invalidate with `DEVICE_DISCONNECTED`; reattach and establish a fresh connection without restarting the app.
+10. Run five disconnect/reconnect cycles. Every normal live disconnect from READY or SIMULATING is recovery-safe by design: it attempts `clear_location()` before closing the connection. If that clear fails, local ownership must still become DISCONNECTED and the connection must still close, but the API/browser must surface the cleanup error rather than report successful disconnect. Each reconnect must create a fresh live connection.
+11. While READY, unplug USB and wait for status polling. The session must invalidate with `DEVICE_DISCONNECTED`; reattach and establish a fresh connection without restarting the app. Confirmed physical absence intentionally skips recovery clear because the transport is already gone.
 12. While SIMULATING, unplug. Once physical absence is positively proven, the logical session must invalidate without trying to clear an already absent transport. Reattach and reconnect.
-13. Quit/relaunch while READY and reconnect.
+13. Quit/relaunch while READY and reconnect. Graceful shutdown of a live READY session should use the same recovery-clear-before-close cleanup path.
 14. Quit while SIMULATING and record the phone's actual behavior. Do not infer it. After reconnect, exercise the READY-state recovery Clear if necessary.
 
 For each failure, capture only a small redacted log section and classify it before editing:
@@ -268,6 +268,7 @@ Repeat package-specific essentials:
 - launch and local URL;
 - page/static assets/security headers;
 - discover/connect/recovery-clear/set/clear;
+- normal disconnect/shutdown recovery clear and truthful cleanup-error reporting;
 - shutdown/relaunch;
 - port collision;
 - persistent redacted log creation;
@@ -294,7 +295,7 @@ Do not mark a test-matrix row PASS unless that row was actually executed on the 
 
 Once local source + primary phone + packaged app gates pass, perform one focused independent review of the final local diff. Review only for:
 
-- false success;
+- false success, including disconnect cleanup;
 - stale-session reuse;
 - clear/recovery semantics;
 - async/task/thread/resource leaks;
