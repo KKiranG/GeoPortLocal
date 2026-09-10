@@ -11,6 +11,7 @@ import webbrowser
 import uvicorn
 
 from geoportlocal import __version__
+from geoportlocal.app import create_app
 from geoportlocal.runtime.logging import configure_logging
 
 DEFAULT_HOST = "127.0.0.1"
@@ -104,7 +105,7 @@ def main() -> None:
         _open_browser_later(url)
 
     config = uvicorn.Config(
-        "geoportlocal.app:create_app",
+        create_app,
         factory=True,
         host=DEFAULT_HOST,
         port=actual_port,
