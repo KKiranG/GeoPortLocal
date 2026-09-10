@@ -69,7 +69,10 @@ async def test_project_zero_three_normalizes_expected_legacy_fields(
 @pytest.mark.asyncio
 async def test_provider_rejects_schema_change_instead_of_leaking_key_error() -> None:
     async def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"regions": [{"region": "NSW", "prices": [{"type": "U91"}]}]})
+        return httpx.Response(
+            200,
+            json={"regions": [{"region": "NSW", "prices": [{"type": "U91"}]}]},
+        )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     provider = ProjectZeroThreeProvider(client)
@@ -166,7 +169,9 @@ async def test_provider_exhausts_bounded_transport_retry(failure_type) -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_retries_server_error_then_succeeds(valid_payload: dict[str, object]) -> None:
+async def test_provider_retries_server_error_then_succeeds(
+    valid_payload: dict[str, object],
+) -> None:
     attempts = 0
 
     async def handler(_: httpx.Request) -> httpx.Response:

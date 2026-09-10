@@ -191,7 +191,9 @@ async def test_clear_transport_failure_invalidates_session(descriptor: DeviceDes
 
 
 @pytest.mark.asyncio
-async def test_clear_from_ready_sends_recovery_clear_to_device(descriptor: DeviceDescriptor) -> None:
+async def test_clear_from_ready_sends_recovery_clear_to_device(
+    descriptor: DeviceDescriptor,
+) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(FakeAdapter(descriptor, connection=connection))
 
@@ -389,7 +391,9 @@ async def test_mutating_operations_are_serialized(descriptor: DeviceDescriptor) 
 
 
 @pytest.mark.asyncio
-async def test_presence_probe_timeout_preserves_active_session(descriptor: DeviceDescriptor) -> None:
+async def test_presence_probe_timeout_preserves_active_session(
+    descriptor: DeviceDescriptor,
+) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(
         FakeAdapter(descriptor, connection=connection),

@@ -159,7 +159,11 @@ class PymobileDeviceAdapter:
 
     async def _find_device(self, identifier: str) -> usbmux.MuxDevice:
         try:
-            devices = [device for device in await usbmux.list_devices() if device.serial == identifier]
+            devices = [
+                device
+                for device in await usbmux.list_devices()
+                if device.serial == identifier
+            ]
         except Exception as exc:
             raise _translate_exception(exc, operation="discover") from exc
 
@@ -257,7 +261,12 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
 
     if isinstance(
         exc,
-        (NotTrustedError, NotPairedError, PairingDialogResponsePendingError, UserDeniedPairingError),
+        (
+            NotTrustedError,
+            NotPairedError,
+            PairingDialogResponsePendingError,
+            UserDeniedPairingError,
+        ),
     ):
         return GeoPortError(
             ErrorCode.DEVICE_NOT_TRUSTED,
@@ -293,7 +302,15 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
             cause=exc,
         )
 
-    if isinstance(exc, (UserspaceTunnelUnavailableError, TunneldConnectionError, RSDRequiredError, MuxException)):
+    if isinstance(
+        exc,
+        (
+            UserspaceTunnelUnavailableError,
+            TunneldConnectionError,
+            RSDRequiredError,
+            MuxException,
+        ),
+    ):
         return GeoPortError(
             ErrorCode.TUNNEL_UNAVAILABLE,
             "Could not establish the iOS developer-service connection.",
@@ -321,8 +338,13 @@ def _translate_exception(exc: BaseException, *, operation: str) -> GeoPortError:
     if operation in {"connect", "discover", "disconnect"} and isinstance(
         exc, (InvalidServiceError, PyMobileDevice3Exception, OSError)
     ):
+        code = (
+            ErrorCode.TUNNEL_UNAVAILABLE
+            if operation == "connect"
+            else ErrorCode.DEVICE_DISCONNECTED
+        )
         return GeoPortError(
-            ErrorCode.TUNNEL_UNAVAILABLE if operation == "connect" else ErrorCode.DEVICE_DISCONNECTED,
+            code,
             "The iOS device transport failed while GeoPortLocal was communicating with the device.",
             retryable=True,
             cause=exc,

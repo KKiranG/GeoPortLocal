@@ -23,7 +23,8 @@ from geoportlocal.runtime.security import (
     rejected_request,
     request_host_allowed,
 )
-from geoportlocal.web.routes import WEB_ROOT, router as web_router
+from geoportlocal.web.routes import WEB_ROOT
+from geoportlocal.web.routes import router as web_router
 
 
 def create_app(
@@ -77,7 +78,10 @@ def create_app(
 
         if not request_host_allowed(request):
             return apply_browser_security_headers(
-                rejected_request("GeoPortLocal only accepts local loopback hosts.", status_code=400),
+                rejected_request(
+                    "GeoPortLocal only accepts local loopback hosts.",
+                    status_code=400,
+                ),
                 no_store=no_store,
             )
         if not mutation_origin_allowed(request):

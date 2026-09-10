@@ -50,6 +50,7 @@ asyncio_mode = "auto"
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+extend-exclude = ["src/main.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

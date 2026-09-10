@@ -13,7 +13,12 @@ _DEFAULT_FRESH_SECONDS = 60.0
 
 
 class FuelService:
-    def __init__(self, provider: FuelProvider, *, fresh_seconds: float = _DEFAULT_FRESH_SECONDS) -> None:
+    def __init__(
+        self,
+        provider: FuelProvider,
+        *,
+        fresh_seconds: float = _DEFAULT_FRESH_SECONDS,
+    ) -> None:
         if fresh_seconds < 0:
             raise ValueError("fresh_seconds must not be negative")
         self._provider = provider

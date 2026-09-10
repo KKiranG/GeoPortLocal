@@ -31,9 +31,9 @@ _ERROR_STATUS = {
 }
 
 
-def _error_response(error: GeoPortError) -> JSONResponse:
+def _error_response(error: GeoPortError, status_code: int | None = None) -> JSONResponse:
     return JSONResponse(
-        status_code=_ERROR_STATUS.get(error.code, 500),
+        status_code=status_code or _ERROR_STATUS.get(error.code, 500),
         content={
             "error": {
                 "code": error.code.value,
@@ -56,7 +56,8 @@ def install_error_handlers(app: FastAPI) -> None:
                 ErrorCode.INVALID_REQUEST,
                 "The request contains invalid or unsupported values.",
                 retryable=False,
-            )
+            ),
+            status_code=422,
         )
 
     @app.exception_handler(Exception)

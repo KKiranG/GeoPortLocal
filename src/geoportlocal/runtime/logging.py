@@ -30,9 +30,9 @@ def redact_identifier(identifier: str | None) -> str:
 def redact_text(value: object) -> str:
     """Return display/log text with common iOS identifiers removed."""
     text = str(value)
+    text = _LABELLED_IDENTIFIER.sub(r"\1\2<identifier:redacted>", text)
     text = _MODERN_UDID.sub("<udid:redacted>", text)
     text = _LEGACY_UDID.sub("<udid:redacted>", text)
-    text = _LABELLED_IDENTIFIER.sub(r"\1\2<identifier:redacted>", text)
     return text
 
 

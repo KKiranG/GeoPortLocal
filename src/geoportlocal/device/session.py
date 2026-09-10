@@ -365,7 +365,13 @@ class SessionManager:
         self._state = DeviceState.DISCONNECTED
         self._last_error = previous_error
 
-    async def _run(self, awaitable: Awaitable[T], *, timeout: float, operation: str) -> T:
+    async def _run(
+        self,
+        awaitable: Awaitable[T],
+        *,
+        timeout: float,  # noqa: ASYNC109
+        operation: str,
+    ) -> T:
         try:
             return await asyncio.wait_for(awaitable, timeout=timeout)
         except TimeoutError as exc:
