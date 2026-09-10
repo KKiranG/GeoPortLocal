@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from geoportlocal.domain.errors import ErrorCode, GeoPortError
+
+_LOGGER = logging.getLogger("geoportlocal.api")
 
 _ERROR_STATUS = {
     ErrorCode.DEVICE_NOT_FOUND: 404,
@@ -27,29 +31,44 @@ _ERROR_STATUS = {
 }
 
 
+def _error_response(error: GeoPortError) -> JSONResponse:
+    return JSONResponse(
+        status_code=_ERROR_STATUS.get(error.code, 500),
+        content={
+            "error": {
+                "code": error.code.value,
+                "message": error.message,
+                "retryable": error.retryable,
+            }
+        },
+    )
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(GeoPortError)
     async def handle_geoport_error(_: Request, error: GeoPortError) -> JSONResponse:
-        return JSONResponse(
-            status_code=_ERROR_STATUS.get(error.code, 500),
-            content={
-                "error": {
-                    "code": error.code.value,
-                    "message": error.message,
-                    "retryable": error.retryable,
-                }
-            },
-        )
+        return _error_response(error)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, __: RequestValidationError) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "code": ErrorCode.INVALID_REQUEST.value,
-                    "message": "The request contains invalid or unsupported values.",
-                    "retryable": False,
-                }
-            },
+        return _error_response(
+            GeoPortError(
+                ErrorCode.INVALID_REQUEST,
+                "The request contains invalid or unsupported values.",
+                retryable=False,
+            )
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(_: Request, error: Exception) -> JSONResponse:
+        # Do not serialize the exception or traceback to the browser. Normal logs
+        # record only its class so an exception containing coordinates, identifiers
+        # or dependency internals cannot become a routine diagnostic leak.
+        _LOGGER.error("Unhandled application error type=%s", type(error).__name__)
+        return _error_response(
+            GeoPortError(
+                ErrorCode.INTERNAL_ERROR,
+                "GeoPortLocal encountered an unexpected internal error.",
+                retryable=False,
+            )
         )
