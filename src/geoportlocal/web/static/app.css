@@ -6,6 +6,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -198,6 +199,7 @@ input:focus, select:focus, button:focus-visible {
 
 .map-panel { min-height: 590px; }
 #map {
+  position: relative;
   width: 100%;
   height: min(66vh, 680px);
   min-height: 480px;
@@ -205,16 +207,86 @@ input:focus, select:focus, button:focus-visible {
   border: 1px solid #dce2e8;
   background: #e8ecef;
   overflow: hidden;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.map-tiles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.map-tile {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.map-marker {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 3px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: #d6402e;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 35%);
+  transform: rotate(-45deg);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.map-controls {
+  position: absolute;
+  z-index: 4;
+  top: 10px;
+  left: 10px;
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #abb7c2;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 14%);
+}
+
+.map-controls button {
+  width: 36px;
+  height: 34px;
+  border: 0;
+  border-bottom: 1px solid #d8dfe5;
+  background: #fff;
+  color: #1d2731;
+  font-size: 21px;
+  line-height: 1;
+}
+.map-controls button:last-child { border-bottom: 0; }
+.map-controls button:hover { background: #f2f5f7; }
+
+.map-attribution {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: 0;
+  padding: 3px 6px;
+  background: rgb(255 255 255 / 86%);
+  color: #4c5967;
+  font-size: 10px;
+  pointer-events: none;
 }
 
 .map-fallback {
-  min-height: 220px;
+  min-height: 90px;
+  margin-top: 9px;
   display: grid;
   place-items: center;
   text-align: center;
   border: 1px dashed #bac5ce;
   border-radius: 9px;
-  padding: 30px;
+  padding: 18px;
   color: #687583;
   background: #f9fafb;
 }
@@ -247,4 +319,8 @@ input:focus, select:focus, button:focus-visible {
   .button.secondary { color: #dce4eb; border-color: #3b4855; }
   .button.danger { color: #f0aaa1; border-color: #6e342d; }
   #map, .map-fallback { background: #111820; border-color: #2d3741; }
+  .map-controls { background: #111820; border-color: #52606d; }
+  .map-controls button { background: #111820; color: #e8edf2; border-color: #394550; }
+  .map-controls button:hover { background: #1c2630; }
+  .map-attribution { background: rgb(17 24 32 / 88%); color: #a9b5c1; }
 }
