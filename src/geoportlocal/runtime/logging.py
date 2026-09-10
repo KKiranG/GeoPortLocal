@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import copy
 import logging
+from logging.handlers import RotatingFileHandler
+import os
+from pathlib import Path
 import re
+import sys
 
 _MODERN_UDID = re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}\b")
 _LEGACY_UDID = re.compile(r"\b[0-9A-Fa-f]{40}\b")
 _LABELLED_IDENTIFIER = re.compile(
     r"(?i)\b(udid|unique(?:device)?id|serial)\s*([:=])\s*([\"']?)[A-Za-z0-9-]{12,}\3"
 )
+_LOG_MAX_BYTES = 1_000_000
+_LOG_BACKUPS = 2
 
 
 def redact_identifier(identifier: str | None) -> str:
@@ -47,16 +53,63 @@ class RedactingFormatter(logging.Formatter):
         return redact_text(super().formatException(exc_info))
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    """Install one process-wide redacting log handler for the local desktop app."""
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        RedactingFormatter(
-            fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+def default_log_path() -> Path:
+    """Return GeoPortLocal's per-user log path without touching legacy GeoPort state."""
+    if sys.platform == "darwin":
+        root = Path.home() / "Library" / "Logs" / "GeoPortLocal"
+    elif os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        root = (
+            Path(local_app_data) / "GeoPortLocal" / "Logs"
+            if local_app_data
+            else Path.home() / "AppData" / "Local" / "GeoPortLocal" / "Logs"
         )
+    else:
+        xdg_state_home = os.environ.get("XDG_STATE_HOME")
+        root = (
+            Path(xdg_state_home) / "geoportlocal"
+            if xdg_state_home
+            else Path.home() / ".local" / "state" / "geoportlocal"
+        )
+    return root / "geoportlocal.log"
+
+
+def configure_logging(level: int = logging.INFO) -> Path | None:
+    """Install redacted stream/file handlers and return the active file path if available."""
+    formatter = RedactingFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    logging.basicConfig(level=level, handlers=[handler], force=True)
+    handlers: list[logging.Handler] = []
+
+    if sys.stderr is not None:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        handlers.append(stream_handler)
+
+    log_path = default_log_path()
+    active_log_path: Path | None = None
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=_LOG_MAX_BYTES,
+            backupCount=_LOG_BACKUPS,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+        active_log_path = log_path
+    except OSError:
+        # Logging must never prevent the local control application from starting.
+        pass
+
+    if not handlers:
+        handlers.append(logging.NullHandler())
+
+    logging.basicConfig(level=level, handlers=handlers, force=True)
 
     for noisy_logger in ("httpcore", "httpx", "uvicorn.access"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+    return active_log_path
