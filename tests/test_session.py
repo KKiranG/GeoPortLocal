@@ -191,7 +191,7 @@ async def test_clear_transport_failure_invalidates_session(descriptor: DeviceDes
 
 
 @pytest.mark.asyncio
-async def test_clear_is_idempotent_when_ready(descriptor: DeviceDescriptor) -> None:
+async def test_clear_from_ready_sends_recovery_clear_to_device(descriptor: DeviceDescriptor) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(FakeAdapter(descriptor, connection=connection))
 
@@ -199,7 +199,34 @@ async def test_clear_is_idempotent_when_ready(descriptor: DeviceDescriptor) -> N
     result = await manager.clear_location()
 
     assert result.state == DeviceState.READY
-    assert connection.clear_calls == 0
+    assert result.location is None
+    assert connection.clear_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_clear_from_ready_preserves_ready_state(
+    descriptor: DeviceDescriptor,
+) -> None:
+    connection = FakeConnection(
+        descriptor,
+        clear_error=GeoPortError(
+            ErrorCode.LOCATION_CLEAR_FAILED,
+            "Recovery clear failed.",
+            retryable=True,
+        ),
+    )
+    manager = SessionManager(FakeAdapter(descriptor, connection=connection))
+
+    await manager.connect(descriptor.identifier)
+
+    with pytest.raises(GeoPortError) as raised:
+        await manager.clear_location()
+
+    assert raised.value.code == ErrorCode.LOCATION_CLEAR_FAILED
+    assert manager.snapshot.state == DeviceState.READY
+    assert manager.snapshot.location is None
+    assert manager.snapshot.last_error is not None
+    assert connection.clear_calls == 1
 
 
 @pytest.mark.asyncio
@@ -332,6 +359,27 @@ async def test_mutating_operations_are_serialized(descriptor: DeviceDescriptor) 
 
     assert clear_result.state == DeviceState.READY
     assert connection.clear_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_presence_probe_timeout_preserves_active_session(descriptor: DeviceDescriptor) -> None:
+    connection = FakeConnection(descriptor)
+    manager = SessionManager(
+        FakeAdapter(descriptor, connection=connection),
+        timeouts=SessionTimeouts(presence=0.01),
+    )
+
+    async def slow_probe(_: str) -> bool:
+        await asyncio.sleep(0.05)
+        return False
+
+    await manager.connect(descriptor.identifier)
+    result = await manager.check_presence(slow_probe)
+
+    assert result.state == DeviceState.READY
+    assert result.device == descriptor
+    assert result.last_error is None
+    assert connection.close_calls == 0
 
 
 @pytest.mark.asyncio
