@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from geoportlocal import __version__
@@ -17,6 +17,12 @@ from geoportlocal.device.presence import PresenceProbe
 from geoportlocal.device.session import SessionManager
 from geoportlocal.fuel.provider import FuelProvider
 from geoportlocal.fuel.service import FuelService
+from geoportlocal.runtime.security import (
+    apply_browser_security_headers,
+    mutation_origin_allowed,
+    rejected_request,
+    request_host_allowed,
+)
 from geoportlocal.web.routes import WEB_ROOT, router as web_router
 
 
@@ -64,6 +70,20 @@ def create_app(
     app.state.session_manager = session_manager
     app.state.fuel_service = fuel_service
     app.state.presence_probe = presence_probe
+
+    @app.middleware("http")
+    async def secure_loopback_requests(request: Request, call_next):
+        if not request_host_allowed(request):
+            return apply_browser_security_headers(
+                rejected_request("GeoPortLocal only accepts local loopback hosts.", status_code=400)
+            )
+        if not mutation_origin_allowed(request):
+            return apply_browser_security_headers(
+                rejected_request("Cross-site mutation requests are not allowed.", status_code=403)
+            )
+
+        response = await call_next(request)
+        return apply_browser_security_headers(response)
 
     install_error_handlers(app)
     app.include_router(device_router)
