@@ -206,17 +206,13 @@ class SessionManager:
 
     async def clear_location(self) -> SessionSnapshot:
         async with self._operation_lock:
-            if self._state == DeviceState.READY and self._connection is not None:
-                self._location = None
-                self._last_error = None
-                return self.snapshot
-
             connection = self._require_connection("clear location")
-            if self._state != DeviceState.SIMULATING:
+            if self._state not in {DeviceState.READY, DeviceState.SIMULATING}:
                 raise InvalidStateError("clear location", self._state.value)
 
             started = time.perf_counter()
             masked_identifier = redact_identifier(connection.descriptor.identifier)
+            previous_state = self._state
             previous_location = self._location
             self._state = DeviceState.CLEARING
 
@@ -230,7 +226,7 @@ class SessionManager:
                 if error.code in _TRANSPORT_FAILURES:
                     await self._invalidate(error)
                 else:
-                    self._state = DeviceState.SIMULATING
+                    self._state = previous_state
                     self._location = previous_location
                     self._last_error = error
                 _LOGGER.warning(
