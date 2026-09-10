@@ -148,7 +148,7 @@ function renderSnapshot(snapshot) {
   ui.setLocation.disabled = busy
     || !hasValidCoordinates()
     || !["ready", "simulating"].includes(current);
-  ui.clearLocation.disabled = busy || current !== "simulating";
+  ui.clearLocation.disabled = busy || !["ready", "simulating"].includes(current);
 
   if (snapshot.last_error) {
     showMessage(`${snapshot.last_error.code}: ${snapshot.last_error.message}`, "error");
@@ -249,7 +249,7 @@ async function clearLocation() {
   await runOperation(async () => {
     const snapshot = await requestJson("/api/location", { method: "DELETE" });
     renderSnapshot(snapshot);
-    showMessage("The simulated location was cleared from the active session.", "success");
+    showMessage("The iOS clear-location request completed successfully.", "success");
   });
 }
 
