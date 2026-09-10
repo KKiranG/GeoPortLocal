@@ -1,112 +1,147 @@
-# GeoPort: Your Location, Anywhere! 🌍 
+# GeoPortLocal
 
+GeoPortLocal is a modernization fork of GeoPort focused on a small, reliable local workflow: connect an iOS device, choose a coordinate, set/clear iOS location simulation, and optionally view Australian fuel-price coordinates.
 
-<p align="center">
-  
-  <a href="https://www.buymeacoffee.com/davesc63">
-    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20beer&emoji=🍺&slug=davesc63&button_colour=FFDD00&font_colour=000000&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a beer">
-  </a><br> https://geoport.me
-</p>
+The active modernization branch is `geoportlocal-modernization`. The legacy `main` branch remains the upstream-derived fallback and has not been rewritten. No modernization release has been published.
 
+## Current status
 
-[![Join Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&style=for-the-badge)](https://discord.gg/genRca55Nb)<br>
-<a href="https://github.com/davesc63/GeoPort/releases/tag/v4.0.2">Release Notes and Downloads</a><br><p>
-<a href="https://github.com/davesc63/GeoPort/blob/main/FAQ.md">Need Help? - FAQ</a><br><p>
-<a href="https://www.surveymonkey.com/r/BLQ8M75">Your feedback helps - Fill out the Survey</a>
+The hardware-independent implementation is in place. It includes:
 
-<p align="center"><strong>GeoPort needs your help.</p></strong> </p>
-Please consider <strong>donating</strong> and supporting the project. Your support helps to grow the platform and features.<br><p></p><br><p></p>
+- Python 3.14 project metadata for `uv`;
+- a FastAPI/uvicorn loopback-only runtime;
+- a project-owned device adapter over current `pymobiledevice3` APIs;
+- one deterministic `SessionManager` for connect/set/clear/disconnect state;
+- the current iOS 17.4+ path using `PreferredRsdTunnel -> DvtProvider -> LocationSimulation`;
+- typed API errors and coordinate validation;
+- idle device-presence probing without a background thread;
+- a Project Zero Three fuel provider behind a validated/cacheable boundary;
+- a plain HTML/CSS/JavaScript browser UI with optional Leaflet map;
+- identifier-redacting logs;
+- automatic loopback port fallback when 54321 is already occupied;
+- fake-adapter regression tests;
+- a first macOS `GeoPortLocal.app` PyInstaller specification.
 
+The real iPhone path and packaged `.app` still require qualification on the target Mac before this branch should replace the old application for regular use.
 
-Immerse yourself in a world of possibilities with **GeoPort**, the ultimate location simulation app. GeoPort allows you to take control of your virtual presence, letting you be anywhere on the globe at the touch of a button. Whether you want to explore distant cities, surprise friends with exotic check-ins, or test location-based apps, GeoPort is your passport to a limitless world.
+## Design rules
 
+GeoPortLocal follows several non-negotiable runtime invariants:
 
+1. A location operation is not reported successful until the underlying device call completes.
+2. Failed or incomplete sessions are never cached as reusable connections.
+3. One selected device has one owned session and serialized mutating operations.
+4. Transport failure invalidates the session; recovery creates a fresh one.
+5. Device control does not depend on fuel-price, map-tile, GitHub, IP-geolocation or other unrelated Internet services.
+6. The local HTTP server binds to `127.0.0.1` only.
+7. TLS verification is not disabled.
+8. Normal logs redact full iOS identifiers.
+9. Application code does not import `pymobiledevice3.cli.*` internals.
+10. The existing GeoPort application is never killed or overwritten by GeoPortLocal.
 
-## Key Features
+See `AGENTS.md` for the agent contract and `docs/ARCHITECTURE.md` for the runtime design.
 
-- **Global Presence**
-Spoof your location and appear as if you're in any city, country, or landmark globally.
+## Scope
 
-- **Explore with Ease**
-Experience the thrill of virtual travel without leaving your comfort zone. Wander the streets of Tokyo, relax on a beach in Bali, or stroll through the historic alleys of Rome—all from the palm of your hand.
+The modern core intentionally keeps:
 
-- **Test Apps Effectively**
-Developers, take note! GeoPort is your go-to tool for testing location-based features in your apps. Simulate diverse scenarios effortlessly.
+- iOS device discovery and selection;
+- trust/developer-mode diagnostics;
+- location set/clear;
+- deterministic disconnect/reconnect;
+- coordinate entry and map picking;
+- Australian fuel-region/type/quote selection.
 
-- **Privacy and Security**
-Your privacy matters. GeoPort ensures a secure experience, allowing you to control when and where your virtual self appears.
+It intentionally does not rebuild GPX playback, route movement, joystick simulation, arbitrary walking/driving automation, broadcast/referral messages, IP-country detection, or forced Wi-Fi side effects.
 
-- **User-Friendly Interface**
-Seamlessly navigate GeoPort's intuitive interface. Set your desired location with a few taps and teleport within seconds.
+GeoPortLocal reports whether its own iOS simulation operation completed. It does not claim that a third-party application will accept a simulated location, and this project does not implement VPN/IP matching, fingerprint concealment, account cycling, jailbreak/root hiding, geofence bypass or third-party anti-abuse evasion.
 
-- **Unleash Your Imagination with GeoPort!**
-Download now and elevate your location experience beyond boundaries. Teleportation has never been this easy—**GeoPort**, where every location is just a click away!
+## First local bootstrap
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/davesc63/GeoPort/main/images/geoport2.png" alt="geoport" width="50%"><br><br>
-   <img src="https://raw.githubusercontent.com/davesc63/GeoPort/main/images/geoport-demo.gif" alt="geoport">
-</p>
+Keep your existing GeoPort installation in place. In the GeoPortLocal clone:
 
-## Fuel Mode:
+```bash
+git fetch origin
+git switch geoportlocal-modernization
+git pull --ff-only
+bash scripts/bootstrap_macos.sh
+```
 
-For the :australia: Aussies :australia: who love to fire up their choppers and get their *Frugal Fuels* from the KwikiMart.
-the **"Fuel"** mode of GeoPort to easily select the best prices across Australia! There is even the ability to select **state-based** pricing
+That first local bootstrap creates `uv.lock`, syncs the Python 3.14 environment, runs Ruff and runs the fast test suite.
 
-<p align="center">
-<img src="https://github.com/davesc63/GeoPort/blob/main/images/fuel.png" alt="fuel" width="50%">
-</p>
+After `uv.lock` has been reviewed and committed, the ordinary quality gate is:
 
-## Developer Mode
+```bash
+bash scripts/check.sh
+```
 
-**Developer Mode:** Enable developer mode on connected iOS devices.
+Run the source app with:
 
-They've made it harder to enable Developer Mode, but GeoPort handles it with ease. If you don't have Developer Mode enabled on your iOS device - you will need to temporarily remove your passcode to allow GeoPort to enable Developer Mode (Don't worry, GeoPort will let you know when running the app)
-<p align="center">
-<img src="https://github.com/davesc63/GeoPort/blob/main/images/devmode.png" alt="devmode" width="50%">
-</p>
+```bash
+uv run geoportlocal
+```
 
-**Passcode Handling**
-<p align="center">
-<img src="https://github.com/davesc63/GeoPort/blob/main/images/passcode.png" alt="passcode" width="50%">
-</p>
+The application prefers `http://127.0.0.1:54321`. If that port belongs to the existing GeoPort app or any other process, GeoPortLocal leaves it alone and automatically selects another free loopback port. The actual URL is printed at startup.
 
+For the exact first Mac/iPhone procedure, use `docs/LOCAL_BOOTSTRAP.md`.
 
+## Browser workflow
 
-## Prerequisites
+The modern UI is intentionally narrow:
 
-An iOS device and a sense of adventure!
-*That's Right* - you do not need to install complex apps like python for **GeoPort** to work
+```text
+Refresh device
+-> Connect
+-> enter/click/select coordinates
+-> Set location
+-> Clear location
+-> Disconnect
+```
 
-**Windows Users**
-You will need to install iTunes (we need their USB service so we can discover the iOS device!)
+Fuel-price lookup is optional. Selecting a fuel quote fills the coordinate picker; it does not automatically apply a location to the device.
 
-## Installation
+The map is also optional. If Leaflet or map tiles cannot load, direct coordinate entry and all device API operations remain available.
 
-- [Download](https://github.com/davesc63/GeoPort/releases/) the package for your operating system
-- Run the application
-- Explore the world and **Simulate Location**
+## Packaging
 
-## App Notes
-- iOS 17 & iOS 18 are supported on both Windows and Mac
-- Administrator / Sudo permissions are required for iOS17
-- If you forget to reset your location when you disconnect, Don't worry! Simply connect your device again and "Stop Location"
+After the source application passes the actual Mac/iPhone qualification:
 
-## Tech Stuff and recognition
-GeoPort is built with python, flask and pymobiledevice3
-Interface inspired by the popular iFakeLocation, GeoPort is built for familiarity with the addition of iOS17 and Windows support (Windows release imminent)
+```bash
+bash scripts/build_macos.sh
+```
 
-Pymobiledevice3 - https://github.com/doronz88/pymobiledevice3<br>
-iFakeLocation - https://github.com/master131/iFakeLocation
+The expected first bundle is:
 
-## Keywords
-iOS 17, location spoofing, ios17 location simulation, ios17 windows support<br>
-iOS 18, location spoofing, ios18 location simulation, ios18 windows support
+```text
+dist/GeoPortLocal.app
+```
 
+Bundle identifier:
 
-## Pay it forward
-If this tools helps you, please consider buying me a beer so I can keep this app going!<br>
-<p align="center">
-  <a href="https://www.buymeacoffee.com/davesc63">
-    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20beer&emoji=🍺&slug=davesc63&button_colour=FFDD00&font_colour=000000&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a beer">
-  </a>
-</p>
+```text
+io.github.kkirang.geoportlocal
+```
+
+Do not replace or rename the existing `GeoPort.app` during qualification. Bundle size is deliberately not optimized before correctness is proven.
+
+## Agentic development
+
+This repository is structured to avoid wasting Codex/Astra context on the legacy monolith.
+
+Start with `AGENTS.md`. Then open only the relevant document and target files:
+
+- `docs/WORKLOG.md` — current handoff state;
+- `docs/LOCAL_BOOTSTRAP.md` — exact local and hardware procedure;
+- `docs/CODEX_HANDOFF.md` — bounded Astra/Codex sessions;
+- `docs/MASTER_PLAN.md` — product sequence and acceptance gates;
+- `docs/ARCHITECTURE.md` — runtime contracts;
+- `docs/TEST_MATRIX.md` — regressions and hardware evidence;
+- `docs/RESEARCH_2026-09.md` — external research baseline.
+
+Do not begin a normal coding task by reading all of `src/main.py`, both legacy map templates, all research and Git history.
+
+## Attribution and license
+
+GeoPortLocal is forked from Dave Scroggie's `davesc63/GeoPort` project and retains the repository's GPL-3.0 license and upstream history. The modernization also depends on the `doronz88/pymobiledevice3` project.
+
+The legacy branch remains available as the reference for upstream behavior while the new implementation is qualified independently.
