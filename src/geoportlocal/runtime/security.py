@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
@@ -30,13 +30,12 @@ _CONTENT_SECURITY_POLICY = "; ".join(
 
 def request_host_allowed(request: Request) -> bool:
     """Reject DNS-rebinding style Host values for the loopback-only app."""
-    host_header = request.headers.get("host", "")
-    host = host_header.split(":", 1)[0].casefold()
-    return host in _ALLOWED_HOSTS
+    host = request.url.hostname
+    return bool(host and host.casefold() in _ALLOWED_HOSTS)
 
 
 def mutation_origin_allowed(request: Request) -> bool:
-    """Allow local/non-browser API clients but reject browser cross-site mutation requests."""
+    """Allow local non-browser clients but require exact same-origin browser mutations."""
     if not request.url.path.startswith("/api/") or request.method not in _MUTATING_METHODS:
         return True
 
@@ -49,10 +48,38 @@ def mutation_origin_allowed(request: Request) -> bool:
         return True
 
     try:
-        origin_host = urlsplit(origin).hostname
+        parsed_origin = urlsplit(origin)
+        request_host = request.url.hostname
+        request_port = request.url.port
     except ValueError:
         return False
-    return bool(origin_host and origin_host.casefold() in _ALLOWED_HOSTS)
+
+    if (
+        parsed_origin.scheme not in {"http", "https"}
+        or not parsed_origin.hostname
+        or not request_host
+        or parsed_origin.hostname.casefold() not in _ALLOWED_HOSTS
+        or request_host.casefold() not in _ALLOWED_HOSTS
+    ):
+        return False
+
+    return (
+        parsed_origin.scheme.casefold() == request.url.scheme.casefold()
+        and parsed_origin.hostname.casefold() == request_host.casefold()
+        and _effective_port(parsed_origin) == _effective_request_port(request.url.scheme, request_port)
+    )
+
+
+def _effective_port(url: SplitResult) -> int:
+    if url.port is not None:
+        return url.port
+    return 443 if url.scheme.casefold() == "https" else 80
+
+
+def _effective_request_port(scheme: str, port: int | None) -> int:
+    if port is not None:
+        return port
+    return 443 if scheme.casefold() == "https" else 80
 
 
 def rejected_request(message: str, *, status_code: int) -> JSONResponse:
