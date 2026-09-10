@@ -11,16 +11,18 @@ The hardware-independent implementation is in place:
 - Python 3.14 project metadata for `uv`;
 - FastAPI/uvicorn loopback-only runtime;
 - project-owned `pymobiledevice3` adapter;
-- one serialized `SessionManager` for connect/set/clear/disconnect state;
+- one serialized `SessionManager` for connect/set/clear/disconnect and physical-presence ownership;
 - iOS 17.4+ path using `PreferredRsdTunnel -> DvtProvider -> LocationSimulation`;
-- typed API errors and strict coordinate validation;
-- idle device-presence probing without a resident watcher thread;
+- explicit recovery Clear from READY for stale simulation left by an earlier process;
+- typed/sanitized API errors and strict coordinate validation;
+- bounded idle device-presence probing without a resident watcher thread;
+- local Host validation, exact-origin mutation protection, restrictive CSP and no-store authoritative responses;
 - Project Zero Three fuel provider behind a validated, cacheable boundary;
 - local HTML/CSS/JavaScript UI;
-- project-owned Web-Mercator map picker using remote image tiles only, with no remote executable JavaScript;
-- identifier-redacting logs;
+- project-owned Web-Mercator map picker using remote OSM image tiles only, with no remote executable JavaScript;
+- bounded persistent identifier-redacting diagnostics;
 - automatic loopback port fallback when 54321 is already occupied;
-- fake-adapter/session/API/fuel/startup/logging/adapter-contract tests;
+- fake-adapter/session/API/fuel/startup/security/logging/adapter-contract tests;
 - conservative macOS `GeoPortLocal.app` PyInstaller specification.
 
 The real iPhone path, live fuel payload and packaged `.app` still require qualification on the target Mac before this branch should replace the old application for regular use.
@@ -29,15 +31,16 @@ The real iPhone path, live fuel payload and packaged `.app` still require qualif
 
 1. A location operation is not reported successful until the underlying device call completes.
 2. Failed or incomplete sessions are never cached as reusable connections.
-3. One selected device has one owned session and serialized mutating operations.
-4. Transport failure invalidates the session; recovery creates a fresh one.
-5. Device control does not depend on fuel-price, map-tile, GitHub, IP-geolocation or other unrelated Internet services.
-6. The local HTTP server binds to `127.0.0.1` only.
-7. TLS verification is not disabled.
-8. Normal logs redact full iOS identifiers and do not log selected coordinates.
-9. Application code does not import `pymobiledevice3.cli.*` internals.
-10. GeoPortLocal never kills, overwrites or renames the existing GeoPort application.
-11. No per-operation or browser-launch helper thread is used by the modern runtime.
+3. One selected device has one owned session and serialized mutating/presence operations.
+4. Transport failure or positively confirmed physical absence invalidates the session; recovery creates a fresh one.
+5. READY is local session state, not proof that an earlier process left no device-side simulation; explicit Clear remains available as recovery.
+6. Device control does not depend on fuel-price, map-tile, GitHub, IP-geolocation or other unrelated Internet services.
+7. The local HTTP server binds to `127.0.0.1` only and browser mutations must be same-origin.
+8. TLS verification is not disabled.
+9. Normal and persisted logs redact full iOS identifiers and do not log selected coordinates.
+10. Application code does not import `pymobiledevice3.cli.*` internals.
+11. GeoPortLocal never kills, overwrites or renames the existing GeoPort application.
+12. No per-operation or browser-launch helper thread is used by the modern runtime.
 
 See `AGENTS.md` for the agent contract and `docs/ARCHITECTURE.md` for the implemented runtime design.
 
@@ -47,7 +50,7 @@ The modern core intentionally keeps:
 
 - iOS discovery and device selection;
 - trust/developer-mode diagnostics;
-- location set/clear;
+- location set/clear and recovery clear;
 - deterministic disconnect/reconnect;
 - coordinate entry and local map picking;
 - Australian fuel-region/type/quote selection.
@@ -83,13 +86,20 @@ uv run geoportlocal
 
 GeoPortLocal prefers `http://127.0.0.1:54321`. If that port belongs to legacy GeoPort or another process, it leaves the owner untouched and reserves another free loopback port. The actual URL is logged at startup.
 
-Use `docs/LOCAL_BOOTSTRAP.md` for the exact Mac/iPhone procedure.
+Persistent macOS diagnostics are written, when possible, to:
+
+```text
+~/Library/Logs/GeoPortLocal/geoportlocal.log
+```
+
+For autonomous local execution, use `docs/HERMES_LOCAL_HANDOFF.md`. `docs/LOCAL_BOOTSTRAP.md` contains the underlying human-readable Mac/iPhone procedure.
 
 ## Browser workflow
 
 ```text
 Refresh devices
 -> Connect
+-> optional recovery Clear while READY
 -> enter/click/select coordinates
 -> Set location
 -> Clear location
@@ -130,8 +140,9 @@ For the next local work, start with:
 
 - `AGENTS.md` — invariants and scope;
 - `docs/WORKLOG.md` — current state;
-- `docs/CODEX_HANDOFF.md` — bounded local sessions;
-- `docs/LOCAL_BOOTSTRAP.md` — exact local/hardware procedure.
+- `docs/HERMES_LOCAL_HANDOFF.md` — definitive autonomous local execution plan;
+- `docs/LOCAL_BOOTSTRAP.md` — exact local/hardware procedure;
+- `docs/CODEX_HANDOFF.md` — bounded Codex/Astra delegation prompts only.
 
 Use the larger design documents only when a concrete failure requires them:
 
@@ -142,7 +153,7 @@ Use the larger design documents only when a concrete failure requires them:
 
 Do not begin a normal task by reading all of legacy `src/main.py`, both old map templates, the whole research note and Git history.
 
-The mechanical environment/lock/lint/test gate does not need GPT-6 Astra. Reserve Astra for difficult real-device/tunnel diagnosis or architecture-sensitive fixes where the extra reasoning is justified.
+Mechanical environment/lock/lint/test work should use normal coding workers. Reserve a frontier reasoning model for a reproduced difficult real-device/tunnel/DVT lifecycle problem or architecture-sensitive fix.
 
 ## Attribution and license
 
