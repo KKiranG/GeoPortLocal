@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import socket
-import threading
 import webbrowser
 
 import uvicorn
@@ -79,16 +78,13 @@ def _listen_on(port: int) -> socket.socket:
     return listener
 
 
-def _open_browser_later(url: str) -> None:
-    timer = threading.Timer(0.45, webbrowser.open, args=(url,))
-    timer.daemon = True
-    timer.start()
-
-
 def main() -> None:
     args = build_parser().parse_args()
     configure_logging()
 
+    # Reserve the listening socket before launching the browser. A browser request
+    # may arrive before uvicorn enters its loop, but the already-listening socket
+    # safely queues it without requiring a helper thread.
     listener = bind_listener(args.port)
     actual_port = int(listener.getsockname()[1])
     url = f"http://{DEFAULT_HOST}:{actual_port}"
@@ -101,9 +97,6 @@ def main() -> None:
         )
     _LOGGER.info("GeoPortLocal %s serving at %s", __version__, url)
 
-    if not args.no_browser:
-        _open_browser_later(url)
-
     config = uvicorn.Config(
         create_app,
         factory=True,
@@ -114,6 +107,10 @@ def main() -> None:
         log_config=None,
     )
     server = uvicorn.Server(config)
+
+    if not args.no_browser:
+        webbrowser.open(url)
+
     try:
         server.run(sockets=[listener])
     finally:
