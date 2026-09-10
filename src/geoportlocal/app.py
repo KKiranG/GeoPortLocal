@@ -73,17 +73,21 @@ def create_app(
 
     @app.middleware("http")
     async def secure_loopback_requests(request: Request, call_next):
+        no_store = request.url.path == "/" or request.url.path.startswith("/api/")
+
         if not request_host_allowed(request):
             return apply_browser_security_headers(
-                rejected_request("GeoPortLocal only accepts local loopback hosts.", status_code=400)
+                rejected_request("GeoPortLocal only accepts local loopback hosts.", status_code=400),
+                no_store=no_store,
             )
         if not mutation_origin_allowed(request):
             return apply_browser_security_headers(
-                rejected_request("Cross-site mutation requests are not allowed.", status_code=403)
+                rejected_request("Cross-site mutation requests are not allowed.", status_code=403),
+                no_store=no_store,
             )
 
         response = await call_next(request)
-        return apply_browser_security_headers(response)
+        return apply_browser_security_headers(response, no_store=no_store)
 
     install_error_handlers(app)
     app.include_router(device_router)
