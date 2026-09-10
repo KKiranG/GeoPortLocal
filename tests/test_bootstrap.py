@@ -3,10 +3,11 @@ from fastapi.testclient import TestClient
 from geoportlocal import __version__
 from geoportlocal.__main__ import DEFAULT_HOST, DEFAULT_PORT, build_parser
 from geoportlocal.app import create_app
+from tests.fakes import FakeAdapter, make_descriptor
 
 
 def test_health_endpoint_is_local_app_health_only() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(FakeAdapter(make_descriptor())))
 
     response = client.get("/api/health")
 
