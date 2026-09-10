@@ -246,7 +246,7 @@ class SessionManager:
     async def _close_quietly(self, connection: DeviceConnection) -> None:
         try:
             await asyncio.wait_for(connection.close(), timeout=self._timeouts.disconnect)
-        except (TimeoutError, Exception):
+        except Exception:
             # Cleanup is best-effort here. The original operation error remains authoritative.
             pass
 
