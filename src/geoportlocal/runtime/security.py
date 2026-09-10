@@ -95,10 +95,16 @@ def rejected_request(message: str, *, status_code: int) -> JSONResponse:
     )
 
 
-def apply_browser_security_headers(response: Response) -> Response:
+def apply_browser_security_headers(
+    response: Response,
+    *,
+    no_store: bool = False,
+) -> Response:
     response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if no_store:
+        response.headers["Cache-Control"] = "no-store"
     return response
