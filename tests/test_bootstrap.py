@@ -116,3 +116,39 @@ def test_cross_site_browser_mutation_is_rejected_without_state_change() -> None:
     assert rejected.status_code == 403
     assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
     assert status.json()["state"] == "ready"
+
+
+def test_different_port_localhost_origin_is_rejected() -> None:
+    descriptor = make_descriptor()
+    app = create_app(FakeAdapter(descriptor))
+
+    with TestClient(app) as client:
+        rejected = client.post(
+            "/api/device/connect",
+            json={"identifier": descriptor.identifier},
+            headers={
+                "origin": "http://testserver:9999",
+                "sec-fetch-site": "same-site",
+            },
+        )
+
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_exact_same_origin_browser_mutation_is_allowed() -> None:
+    descriptor = make_descriptor()
+    app = create_app(FakeAdapter(descriptor))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/device/connect",
+            json={"identifier": descriptor.identifier},
+            headers={
+                "origin": "http://testserver",
+                "sec-fetch-site": "same-origin",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "ready"
