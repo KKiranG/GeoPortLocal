@@ -13,6 +13,14 @@ _LABELLED_IDENTIFIER = re.compile(
 )
 
 
+def redact_identifier(identifier: str | None) -> str:
+    """Return a stable short suffix suitable for routine diagnostic logs."""
+    if not identifier:
+        return "<none>"
+    suffix = identifier[-4:] if len(identifier) > 4 else identifier
+    return f"***{suffix}"
+
+
 def redact_text(value: object) -> str:
     """Return display/log text with common iOS identifiers removed."""
     text = str(value)
@@ -32,7 +40,10 @@ class RedactingFormatter(logging.Formatter):
         safe_record.exc_text = None
         return redact_text(super().format(safe_record))
 
-    def formatException(self, exc_info: tuple[type[BaseException], BaseException, object]) -> str:  # type: ignore[override]
+    def formatException(  # type: ignore[override]
+        self,
+        exc_info: tuple[type[BaseException], BaseException, object],
+    ) -> str:
         return redact_text(super().formatException(exc_info))
 
 
