@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LOCAL IOS LOCATION CONTROL</div>
+      <h1>{{ app_name }}</h1>
+    </div>
+    <div class="runtime-state" aria-live="polite">
+      <span class="state-dot" id="state-dot"></span>
+      <span id="state-label">Disconnected</span>
+      <span class="version">v{{ version }}</span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+
+    <section class="notice" aria-label="Scope notice">
+      <strong>Device truth only.</strong>
+      GeoPortLocal reports whether its iOS location-simulation operation completed. It does not determine or claim that another application will accept a simulated location.
+    </section>
+
+    <div class="workspace">
+      <div class="controls-column">
+        <section class="panel" aria-labelledby="device-heading">
+          <div class="panel-heading">
+            <div>
+              <div class="step">01</div>
+              <h2 id="device-heading">Device</h2>
+            </div>
+            <button id="refresh-devices" class="button secondary" type="button">Refresh</button>
+          </div>
+
+          <label for="device-select">Connected iOS device</label>
+          <select id="device-select">
+            <option value="">Scanning…</option>
+          </select>
+
+          <div id="device-detail" class="detail muted">No active device session.</div>
+
+          <div class="button-row">
+            <button id="connect-device" class="button primary" type="button" disabled>Connect</button>
+            <button id="disconnect-device" class="button danger" type="button" disabled>Disconnect</button>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="location-heading">
+          <div class="panel-heading">
+            <div>
+              <div class="step">02</div>
+              <h2 id="location-heading">Location</h2>
+            </div>
+          </div>
+
+          <div class="coordinate-grid">
+            <div>
+              <label for="latitude">Latitude</label>
+              <input id="latitude" type="number" min="-90" max="90" step="any" inputmode="decimal" value="-33.8688">
+            </div>
+            <div>
+              <label for="longitude">Longitude</label>
+              <input id="longitude" type="number" min="-180" max="180" step="any" inputmode="decimal" value="151.2093">
+            </div>
+          </div>
+
+          <p class="hint">Enter coordinates, click the map, or select a fuel quote below.</p>
+          <div id="active-location" class="detail muted">No simulated location is recorded by this session.</div>
+
+          <div class="button-row">
+            <button id="set-location" class="button primary" type="button" disabled>Set location</button>
+            <button id="clear-location" class="button secondary" type="button" disabled>Clear location</button>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="fuel-heading">
+          <div class="panel-heading">
+            <div>
+              <div class="step">03</div>
+              <h2 id="fuel-heading">Fuel prices</h2>
+            </div>
+            <span id="fuel-freshness" class="status-tag" hidden></span>
+          </div>
+
+          <div class="coordinate-grid">
+            <div>
+              <label for="fuel-region">Region</label>
+              <select id="fuel-region"><option value="">Loading…</option></select>
+            </div>
+            <div>
+              <label for="fuel-type">Fuel type</label>
+              <select id="fuel-type" disabled><option value="">—</option></select>
+            </div>
+          </div>
+
+          <div id="fuel-quote" class="quote muted">Fuel data is optional. Device controls continue to work if the provider or Internet is unavailable.</div>
+        </section>
+      </div>
+
+      <section class="panel map-panel" aria-labelledby="map-heading">
+        <div class="panel-heading">
+          <div>
+            <div class="step">MAP</div>
+            <h2 id="map-heading">Coordinate picker</h2>
+          </div>
+        </div>
+        <div id="map" aria-label="Map coordinate picker"></div>
+        <div id="map-fallback" class="map-fallback" hidden>
+          Map tiles are unavailable. You can still enter coordinates directly and use every device control.
+        </div>
+        <p class="hint">The map is an optional Internet view. Device connection and set/clear operations do not depend on it.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
