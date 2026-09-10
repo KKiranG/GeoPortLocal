@@ -245,7 +245,9 @@ async def test_disconnect_is_idempotent_when_already_disconnected(
 
 
 @pytest.mark.asyncio
-async def test_disconnect_from_ready_closes_without_clear(descriptor: DeviceDescriptor) -> None:
+async def test_disconnect_from_ready_runs_recovery_clear_then_closes(
+    descriptor: DeviceDescriptor,
+) -> None:
     connection = FakeConnection(descriptor)
     manager = SessionManager(FakeAdapter(descriptor, connection=connection))
 
@@ -253,7 +255,32 @@ async def test_disconnect_from_ready_closes_without_clear(descriptor: DeviceDesc
     result = await manager.disconnect()
 
     assert result.state == DeviceState.DISCONNECTED
-    assert connection.clear_calls == 0
+    assert result.last_error is None
+    assert connection.clear_calls == 1
+    assert connection.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_from_ready_still_closes_when_recovery_clear_fails(
+    descriptor: DeviceDescriptor,
+) -> None:
+    connection = FakeConnection(
+        descriptor,
+        clear_error=GeoPortError(
+            ErrorCode.LOCATION_CLEAR_FAILED,
+            "Recovery clear failed during disconnect.",
+            retryable=True,
+        ),
+    )
+    manager = SessionManager(FakeAdapter(descriptor, connection=connection))
+
+    await manager.connect(descriptor.identifier)
+    result = await manager.disconnect()
+
+    assert result.state == DeviceState.DISCONNECTED
+    assert result.last_error is not None
+    assert result.last_error.code == ErrorCode.LOCATION_CLEAR_FAILED
+    assert connection.clear_calls == 1
     assert connection.close_calls == 1
 
 
@@ -396,7 +423,7 @@ async def test_set_while_disconnected_is_rejected_without_adapter_call(
 
 
 @pytest.mark.asyncio
-async def test_repeated_connect_disconnect_closes_every_fresh_connection(
+async def test_repeated_connect_disconnect_cleans_every_fresh_connection(
     descriptor: DeviceDescriptor,
 ) -> None:
     class FreshConnectionAdapter:
@@ -421,6 +448,7 @@ async def test_repeated_connect_disconnect_closes_every_fresh_connection(
         assert disconnected.state == DeviceState.DISCONNECTED
 
     assert len(adapter.connections) == 100
+    assert all(connection.clear_calls == 1 for connection in adapter.connections)
     assert all(connection.close_calls == 1 for connection in adapter.connections)
 
 
