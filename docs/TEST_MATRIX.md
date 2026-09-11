@@ -151,7 +151,7 @@ Record actual runs here. Never infer PASS from upstream documentation or committ
 
 | Host | Host version | Device | iOS | Connection | Discover | Connect | Recovery clear from READY | Set | Clear | 20x set/clear | Unplug recovery | Result | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| MacBook Air (M2, 16GB) | macOS 26.5.1 (Build 25F80) | None attached | N/A | USB | N/A | N/A | N/A | N/A | N/A | N/A | N/A | BLOCKED / PENDING HARDWARE | usbmux list returned empty; no physical iPhone connected over USB during autonomous run. H05 (port collision/coexistence), H06 (offline resilience), H07 (localhost boundary) observed PASS. |
+| MacBook Air (M2, 16GB) | macOS 26.5.1 (Build 25F80) | iPhone (network discovery only) | 26.6.1 | Network; no USB transport | PARTIAL (metadata only) | N/A | N/A | N/A | N/A | N/A | N/A | BLOCKED / PENDING USB HARDWARE | usbmux exposed one network representation, but no iPhone was attached over USB, so no connect/location lifecycle command was attempted. H05 and H07 observed PASS. H06 is partial: provider-outage isolation passed, while the real offline phone workflow remains pending hardware. |
 
 Add rows only for hardware actually tested.
 
